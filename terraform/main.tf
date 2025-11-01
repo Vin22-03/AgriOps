@@ -79,23 +79,23 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.8.0"
 
-  cluster {
-    name    = "agrivisionops-cluster"
-    version = "1.30"
-  }
+  # Corrected syntax: Pass cluster details as direct arguments
+  cluster_name    = "agrivisionops-cluster"
+  cluster_version = "1.30"
+  
+  # Corrected syntax: This is now a direct argument
+  cluster_endpoint_public_access = true 
 
-  vpc_id     = ""      # will be filled in Phase 2
-  subnet_ids = []      # will be filled in Phase 2
+  vpc_id           = ""      # will be filled in Phase 2
+  subnet_ids       = []      # will be filled in Phase 2
 
-  enable_irsa       = true
-  create_kms_key    = false
-  cluster_endpoint_public_access = true
+  enable_irsa      = true
+  create_kms_key   = false
 
   tags = {
     Project = "AgriVisionOps"
   }
 }
-
 # 5️⃣ Outputs for reference
 output "s3_bucket_name" {
   value = aws_s3_bucket.agri_data.bucket
