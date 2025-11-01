@@ -1,7 +1,7 @@
 ############################################
 # 🌾 AgriVisionOps Unified Terraform Infra
 # Phase-1: Core AWS + SageMaker Role
-# Phase-2: VPC + EKS Cluster
+# Phase-2: VPC + EKS Cluster (free-tier friendly)
 ############################################
 
 terraform {
@@ -48,8 +48,9 @@ resource "aws_sns_topic" "irrigation_alerts" {
 }
 
 # 3️⃣ IAM Role — for SageMaker
+#    (avoid EntityAlreadyExists by using name_prefix)
 resource "aws_iam_role" "sagemaker_role" {
-  name = "sagemaker_execution_role"
+  name_prefix = "sagemaker_execution_role-"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -97,29 +98,35 @@ module "vpc" {
 }
 
 # 5️⃣ EKS cluster module
-# 5️⃣ EKS cluster module
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.8.0"
 
   name               = "agrivisionops-cluster"
   kubernetes_version = "1.30"
-  
-  # Ensure the necessary networking arguments are present
-  vpc_id           = module.vpc.vpc_id
-  subnet_ids       = module.vpc.private_subnets
 
-  enable_irsa      = true
-  # REMOVED: create_kms_key = false 
-  # REMOVED: cluster_encryption_config = [...] 
-  # Removing these defaults to NO EKS SECRETS ENCRYPTION
+  # networking
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
 
+  # good to have from docs
+  endpoint_public_access                   = true
+  enable_cluster_creator_admin_permissions = true
+
+  # we are NOT enabling KMS / encryption here,
+  # because last time the module asked for key_arn
+  # when we partially set the options.
+
+  # ✅ free-tier friendly node group
   eks_managed_node_groups = {
     default = {
-      desired_size   = 1
-      max_size       = 2
       min_size       = 1
-      instance_types = ["t3.medium"]
+      max_size       = 1
+      desired_size   = 1
+      instance_types = ["t3.micro"] # <— your account complained about t3.medium
+      ami_type       = "AL2023_x86_64_STANDARD"
+      capacity_type  = "ON_DEMAND"
+      disk_size      = 20
     }
   }
 
@@ -127,6 +134,7 @@ module "eks" {
     Project = "AgriVisionOps"
   }
 }
+
 ############################################
 # 📤 Outputs (for Jenkins & later CD stage)
 ############################################
