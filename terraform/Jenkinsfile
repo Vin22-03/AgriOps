@@ -1,0 +1,105 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = "us-east-1"                     // 🌎 Default AWS region
+        TF_DIR = "terraform"                         // 📂 Folder containing Terraform code
+        AWS_CREDENTIALS = credentials('aws-creds')   // 🔐 Jenkins credential ID for AWS
+        GIT_CREDENTIALS = 'github-creds'             // 🔐 Jenkins credential ID for GitHub
+    }
+
+    stages {
+
+        stage('Checkout Code') {
+            steps {
+                echo "🔹 Cloning infrastructure repo..."
+                git branch: 'main',
+                    url: 'https://github.com/Vin22-03/AgriOps.git',
+                    credentialsId: "${GIT_CREDENTIALS}"
+            }
+        }
+
+        stage('Verify Environment Tools') {
+            steps {
+                echo "🧩 Checking environment tools (Terraform, AWS CLI, Docker)..."
+                sh '''
+                terraform -version
+                aws --version
+                docker --version
+                '''
+            }
+        }
+
+        stage('Initialize Terraform') {
+            steps {
+                dir("${TF_DIR}") {
+                    echo "🔹 Initializing Terraform..."
+                    sh 'terraform init -input=false'
+                }
+            }
+        }
+
+        stage('Validate Terraform Code') {
+            steps {
+                dir("${TF_DIR}") {
+                    echo "🧠 Validating Terraform configuration..."
+                    sh 'terraform validate'
+                }
+            }
+        }
+
+        stage('Plan Infrastructure Changes') {
+            steps {
+                dir("${TF_DIR}") {
+                    echo "🗺️ Creating Terraform plan..."
+                    sh '''
+                    terraform plan \
+                        -var "aws_access_key=${AWS_CREDENTIALS_USR}" \
+                        -var "aws_secret_key=${AWS_CREDENTIALS_PSW}" \
+                        -var "region=${AWS_REGION}" \
+                        -out=tfplan.out
+                    '''
+                }
+            }
+        }
+
+        stage('Approval Before Apply') {
+            steps {
+                script {
+                    input message: "⚠️ Review Terraform Plan and Approve Apply?"
+                }
+            }
+        }
+
+        stage('Apply Infrastructure') {
+            steps {
+                dir("${TF_DIR}") {
+                    echo "🚀 Applying Terraform plan to deploy AWS resources..."
+                    sh 'terraform apply -auto-approve tfplan.out'
+                }
+            }
+        }
+
+        stage('Post-Deploy Summary') {
+            steps {
+                echo "✅ Terraform deployment complete!"
+                echo "🌿 AWS Region: ${AWS_REGION}"
+                echo "🧾 Check AWS Console for new resources (ECR, S3, IAM, etc.)"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "🎉 SUCCESS: Agri-Vision-Ops infrastructure deployed successfully!"
+        }
+        failure {
+            echo "❌ FAILURE: Check console logs for details."
+        }
+        always {
+            echo "🧹 Cleaning Jenkins workspace..."
+            deleteDir()
+        }
+    }
+}
+
