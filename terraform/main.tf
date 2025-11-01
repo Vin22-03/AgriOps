@@ -76,13 +76,20 @@ resource "aws_iam_role_policy_attachment" "sagemaker_full" {
 
 # 4️⃣ Placeholder EKS cluster skeleton (to be expanded later)
 module "eks" {
-  source          = "terraform-aws-modules/eks/aws"
-  version         = "21.8.0"           # ✅ lock version for consistency
-  cluster_name    = "agrivisionops-cluster"
-  cluster_version = "1.30"
-  vpc_id          = ""                 # 🟡 to be filled in Phase-2
-  subnet_ids      = []                 # 🟡 to be filled in Phase-2
-  manage_aws_auth = true
+  source  = "terraform-aws-modules/eks/aws"
+  version = "21.8.0"
+
+  cluster {
+    name    = "agrivisionops-cluster"
+    version = "1.30"
+  }
+
+  vpc_id     = ""      # will be filled in Phase 2
+  subnet_ids = []      # will be filled in Phase 2
+
+  enable_irsa       = true
+  create_kms_key    = false
+  cluster_endpoint_public_access = true
 
   tags = {
     Project = "AgriVisionOps"
