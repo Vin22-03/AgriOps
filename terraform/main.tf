@@ -79,13 +79,11 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.8.0"
 
-  # Corrected syntax: Pass cluster details as direct arguments
-  cluster_name    = "agrivisionops-cluster"
-  cluster_version = "1.30"
+  # Correct argument names for v21.8.0
+  name               = "agrivisionops-cluster"
+  kubernetes_version = "1.30"
+  endpoint_public_access = true 
   
-  # Corrected syntax: This is now a direct argument
-  cluster_endpoint_public_access = true 
-
   vpc_id           = ""      # will be filled in Phase 2
   subnet_ids       = []      # will be filled in Phase 2
 
