@@ -1,0 +1,102 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = "us-east-1"
+        TF_DIR = "terraform"
+    }
+
+    stages {
+        stage('Checkout Repository') {
+            steps {
+                echo "📦 Cloning AgriVisionOps repo..."
+                git branch: 'main', url: 'https://github.com/Vin22-03/AgriOps.git', credentialsId: 'github-creds'
+            }
+        }
+
+        stage('Environment Verification') {
+            steps {
+                echo "🧩 Checking Terraform, AWS CLI, and Docker versions..."
+                sh '''
+                    terraform -version
+                    aws --version
+                    docker --version
+                '''
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir("${TF_DIR}") {
+                    echo "⚙️ Initializing Terraform for VPC + EKS..."
+                    sh 'terraform init -input=false'
+                }
+            }
+        }
+
+        stage('Terraform Validate') {
+            steps {
+                dir("${TF_DIR}") {
+                    echo "🔍 Validating Terraform configuration..."
+                    sh 'terraform validate'
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    dir("${TF_DIR}") {
+                        echo "🗺️ Creating Terraform Plan for EKS..."
+                        sh '''
+                            export AWS_REGION=${AWS_REGION}
+                            terraform plan -input=false -out=tfplan.out
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Manual Approval') {
+            steps {
+                input message: "⚠️ Proceed with applying Phase-2 Terraform changes?"
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    dir("${TF_DIR}") {
+                        echo "🚀 Applying Terraform changes to create EKS..."
+                        sh '''
+                            export AWS_REGION=${AWS_REGION}
+                            terraform apply -auto-approve tfplan.out
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Post-Deployment Outputs') {
+            steps {
+                dir("${TF_DIR}") {
+                    echo "📤 Showing EKS and VPC outputs..."
+                    sh 'terraform output'
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Phase-2 (VPC + EKS) Deployment Successful!"
+        }
+        failure {
+            echo "❌ Phase-2 failed. Please review the Jenkins logs."
+        }
+        always {
+            echo "🧹 Cleaning workspace..."
+            deleteDir()
+        }
+    }
+}
