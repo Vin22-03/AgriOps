@@ -9,7 +9,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.40.0"     # ✅ compatible with EKS module v21.8.0
+      version = "~> 6.15.0"     # ✅ compatible with EKS module v21.8.0
     }
     random = {
       source = "hashicorp/random"
