@@ -109,7 +109,7 @@ module "eks" {
 
   enable_irsa       = true
   create_kms_key    = false
-  encryption_config = []   # ✅ correct key for v21.8.0
+#  encryption_config = []   # ✅ correct key for v21.8.0
 
   eks_managed_node_groups = {
     default = {
