@@ -53,11 +53,9 @@ pipeline {
                 dir("${TF_DIR}") {
                     echo "🗺️ Creating Terraform plan..."
                     sh '''
-                    terraform plan \
-                        -var "aws_access_key=${AWS_CREDENTIALS_USR}" \
-                        -var "aws_secret_key=${AWS_CREDENTIALS_PSW}" \
-                        -var "region=${AWS_REGION}" \
-                        -out=tfplan.out
+                    export AWS_ACCESS_KEY_ID=${AWS_CREDENTIALS_USR}
+                    export AWS_SECRET_ACCESS_KEY=${AWS_CREDENTIALS_PSW}
+                    terraform plan -input=false -out=tfplan.out
                     '''
                 }
             }
@@ -75,7 +73,11 @@ pipeline {
             steps {
                 dir("${TF_DIR}") {
                     echo "🚀 Applying Terraform plan to deploy AWS resources..."
-                    sh 'terraform apply -auto-approve tfplan.out'
+                    sh '''
+                    export AWS_ACCESS_KEY_ID=${AWS_CREDENTIALS_USR}
+                    export AWS_SECRET_ACCESS_KEY=${AWS_CREDENTIALS_PSW}
+                    terraform apply -auto-approve tfplan.out
+                    '''
                 }
             }
         }
@@ -84,7 +86,7 @@ pipeline {
             steps {
                 echo "✅ Terraform deployment complete!"
                 echo "🌿 AWS Region: ${AWS_REGION}"
-                echo "🧾 Check AWS Console for new resources (ECR, S3, IAM, etc.)"
+                echo "🧾 Check AWS Console for new resources (S3, SNS, IAM, etc.)"
             }
         }
     }
@@ -102,4 +104,3 @@ pipeline {
         }
     }
 }
-
