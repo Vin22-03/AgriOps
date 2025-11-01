@@ -97,12 +97,14 @@ module "vpc" {
 }
 
 # 5️⃣ EKS cluster module
+# 5️⃣ EKS cluster module
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.8.0"
 
-  cluster_name    = "agrivisionops-cluster"
-  cluster_version = "1.30"
+  name               = "agrivisionops-cluster"
+  kubernetes_version = "1.30"
+
   cluster_endpoint_public_access = true
 
   vpc_id     = module.vpc.vpc_id
