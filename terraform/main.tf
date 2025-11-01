@@ -97,19 +97,22 @@ module "vpc" {
 }
 
 # 5️⃣ EKS cluster module
+# 5️⃣ EKS cluster module
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.8.0"
 
   name               = "agrivisionops-cluster"
   kubernetes_version = "1.30"
+  
+  # Ensure the necessary networking arguments are present
+  vpc_id           = module.vpc.vpc_id
+  subnet_ids       = module.vpc.private_subnets
 
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnets
-
-  enable_irsa       = true
-  create_kms_key    = false
-#  encryption_config = []   # ✅ correct key for v21.8.0
+  enable_irsa      = true
+  # REMOVED: create_kms_key = false 
+  # REMOVED: cluster_encryption_config = [...] 
+  # Removing these defaults to NO EKS SECRETS ENCRYPTION
 
   eks_managed_node_groups = {
     default = {
@@ -124,7 +127,6 @@ module "eks" {
     Project = "AgriVisionOps"
   }
 }
-
 ############################################
 # 📤 Outputs (for Jenkins & later CD stage)
 ############################################
