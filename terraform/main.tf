@@ -75,25 +75,25 @@ resource "aws_iam_role_policy_attachment" "sagemaker_full" {
 }
 
 # 4️⃣ Placeholder EKS cluster skeleton (to be expanded later)
-module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "21.8.0"
+#module "eks" {
+#  source  = "terraform-aws-modules/eks/aws"
+#  version = "21.8.0"
 
   # Correct argument names for v21.8.0
-  name               = "agrivisionops-cluster"
-  kubernetes_version = "1.30"
-  endpoint_public_access = true 
-  
-  vpc_id           = ""      # will be filled in Phase 2
-  subnet_ids       = []      # will be filled in Phase 2
-
-  enable_irsa      = true
-  create_kms_key   = false
-
-  tags = {
-    Project = "AgriVisionOps"
-  }
-}
+#  name               = "agrivisionops-cluster"
+#  kubernetes_version = "1.30"
+#  endpoint_public_access = true 
+#  
+#  vpc_id           = ""      # will be filled in Phase 2
+#  subnet_ids       = []      # will be filled in Phase 2
+#
+#  enable_irsa      = true
+#  create_kms_key   = false
+#
+#  tags = {
+#    Project = "AgriVisionOps"
+#  }
+#}
 # 5️⃣ Outputs for reference
 output "s3_bucket_name" {
   value = aws_s3_bucket.agri_data.bucket
