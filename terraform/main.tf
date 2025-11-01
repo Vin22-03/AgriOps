@@ -107,12 +107,9 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  # you already wanted no KMS — that's fine
-  create_kms_key            = false
-  # 👇 THIS is the missing piece
-  cluster_encryption_config = []
-
-  enable_irsa = true
+  enable_irsa       = true
+  create_kms_key    = false
+  encryption_config = []   # ✅ correct key for v21.8.0
 
   eks_managed_node_groups = {
     default = {
