@@ -116,7 +116,7 @@ module "eks" {
   version = "21.8.0"
 
   # 👇 random in the name = new KMS alias + new CW log group every run
-  name               = "agrivisionops-cluster-${random_id.suffix.hex}"
+  name               = "agrivisionops-${random_id.suffix.hex}"
   kubernetes_version = "1.30"
 
   # put worker nodes in PUBLIC subnets so we don't need NAT
