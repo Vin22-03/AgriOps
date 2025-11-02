@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from typing import Dict
-
+from fastapi.middleware.cors import CORSMiddleware
 # ---------------------------------------------
 # 🌾 AgriVisionOps Backend API
 # Phase 1 – Mock + Structure Setup
@@ -11,6 +11,15 @@ app = FastAPI(
     title="AgriVisionOps API",
     version="0.1.0",
     description="AI-powered predictive agriculture platform (FastAPI backend)"
+)
+
+# ✅ Allow frontend (localhost:3000) to access backend (8090)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ----------- MODELS -----------

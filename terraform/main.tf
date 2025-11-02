@@ -138,9 +138,7 @@ module "eks" {
       min_size       = 1
       max_size       = 1
       desired_size   = 1
-      instance_types = ["t2.micro"]    # ✅ free-tier eligible
-      capacity_type  = "ON_DEMAND"
-      disk_size      = 20
+      instance_types = ["t3.small"]    # ✅ free-tier eligible
 
       # explicitly use public subnets for worker nodes
       subnet_ids = module.vpc.public_subnets
