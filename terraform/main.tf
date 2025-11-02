@@ -145,6 +145,10 @@ module "eks" {
       instance_types = ["t2.micro"]
       capacity_type  = "ON_DEMAND"
       disk_size      = 20
+
+      # 🧩 ensure instances get public IPs
+      subnet_ids = module.vpc.public_subnets
+
     }
   }
 
