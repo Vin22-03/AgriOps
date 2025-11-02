@@ -115,40 +115,34 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.8.0"
 
-  # 👇 random in the name = new KMS alias + new CW log group every run
+  # 👇 random suffix ensures unique KMS alias + CW log group names every run
   name               = "agrivisionops-${random_id.suffix.hex}"
   kubernetes_version = "1.30"
 
-  # put worker nodes in PUBLIC subnets so we don't need NAT
+  # ✅ VPC & networking configuration
   vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.public_subnets
+  subnet_ids = module.vpc.public_subnets   # ✅ using public subnets for free-tier testing
 
-  # good DX
+  # ✅ cluster networking behavior
   endpoint_public_access                   = true
   enable_cluster_creator_admin_permissions = true
 
-  # ❗ important:
-  # the module was creating KMS + CW log group with fixed names because
-  # the cluster name was fixed. Randomizing cluster name solves that.
-  # (we could also set create_cloudwatch_log_group = false, but this way
-  # you still get logs.)
-
+  # 🧩 disable NAT since we're not using private subnets
+  # (enable_nat_gateway belongs to the VPC module, not here)
+  # → You already have it correctly set in module "vpc"
+  
+  # ✅ Free-tier-friendly managed node group
   eks_managed_node_groups = {
     default = {
       min_size       = 1
       max_size       = 1
       desired_size   = 1
-
-      # previous error was:
-      # "The specified instance type is not eligible for Free Tier."
-      # so let's go with t2.micro
-      instance_types = ["t2.micro"]
+      instance_types = ["t2.micro"]    # ✅ free-tier eligible
       capacity_type  = "ON_DEMAND"
       disk_size      = 20
 
-      # 🧩 ensure instances get public IPs
+      # explicitly use public subnets for worker nodes
       subnet_ids = module.vpc.public_subnets
-
     }
   }
 
