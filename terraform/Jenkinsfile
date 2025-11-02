@@ -59,7 +59,7 @@ pipeline {
                     echo "⚙️ Initializing Terraform with remote backend..."
                     withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                         sh '''
-                        terraform init -input=false -migrate state
+                        terraform init -input=false -force-copy -no-color
                         '''
                     }
                 }
