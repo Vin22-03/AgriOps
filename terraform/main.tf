@@ -99,6 +99,7 @@ module "vpc" {
   single_nat_gateway = false
 
   # we still want IGW for public subnets (module does this by default)
+  map_public_ip_on_launch = true
 
   tags = {
     Project = "AgriVisionOps"
