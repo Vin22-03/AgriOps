@@ -1,155 +1,173 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        AWS_REGION      = "us-east-1"                       // 🌎 AWS region
-        TF_DIR          = "terraform"                       // 📂 Terraform folder
-        AWS_CREDENTIALS  = credentials('aws-creds')         // 🔐 AWS credentials ID (This line is unused but standard)
-        GIT_CREDENTIALS  = 'github-creds'                   // 🔐 GitHub credentials ID
+  options {
+    timestamps()
+    ansiColor('xterm')
+  }
+
+  environment {
+    AWS_REGION      = "us-east-1"                 // 🌎 AWS region
+    TF_DIR          = "terraform"                 // 📂 Terraform folder
+    // NOTE: This binding is unused below since we prefer withCredentials blocks.
+    // Keeping it is harmless, but you can remove it if you want.
+    AWS_CREDENTIALS = credentials('aws-creds')    // 🔐 AWS creds (unused var)
+    GIT_CREDENTIALS = 'github-creds'              // 🔐 GitHub credentials ID
+  }
+
+  stages {
+
+    stage('Checkout Repository') {
+      steps {
+        echo "📦 Cloning AgriVisionOps repository..."
+        git branch: 'main',
+            url: 'https://github.com/Vin22-03/AgriOps.git',
+            credentialsId: "${GIT_CREDENTIALS}"
+      }
     }
 
-    stages {
-
-        stage('Checkout Repository') {
-            steps {
-                echo "📦 Cloning AgriVisionOps repository..."
-                git branch: 'main',
-                    url: 'https://github.com/Vin22-03/AgriOps.git',
-                    credentialsId: "${GIT_CREDENTIALS}"
-            }
-        }
-
-        stage('Verify Tools') {
-            steps {
-                echo "🧩 Verifying Terraform, AWS CLI, and Docker..."
-                sh '''
-                    terraform -version
-                    aws --version
-                    docker --version
-                '''
-            }
-        }
-
-        stage('Pre-check Existing VPC') {
-            steps {
-                script {
-                    echo "🔍 Checking for existing AgriVisionOps VPC..."
-                    // NOTE: Running AWS CLI commands here is generally fine without explicit withCredentials,
-                    // as Jenkins often injects them globally or uses the agent's IAM role, 
-                    // but it relies on proper agent configuration.
-                    def vpcCheck = sh(
-                        script: """
-                            aws ec2 describe-vpcs \\
-                            --filters "Name=tag:Project,Values=AgriVisionOps" \\
-                            --query "Vpcs[*].VpcId" \\
-                            --region ${AWS_REGION} \\
-                            --output text || true
-                        """,
-                        returnStdout: true
-                    ).trim()
-                    if (vpcCheck) {
-                        echo "⚠️ Found existing VPC: ${vpcCheck}. Terraform will reuse it."
-                    } else {
-                        echo "✅ No existing VPC found. Fresh infra will be created."
-                    }
-                }
-            }
-        }
-
-        stage('Terraform Init') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "⚙️ Initializing Terraform with remote backend..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                        sh '''
-                        terraform init -input=false -force-copy -no-color
-                        '''
-                    }
-                }
-            }
-        }
-
-        stage('Terraform Validate') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "🧠 Validating Terraform configuration..."
-                    sh 'terraform validate'
-                }
-            }
-        }
-
-        stage('Terraform Plan') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "🗺️ Generating Terraform Plan..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                        sh 'terraform plan -input=false -out=tfplan.out'
-                    }
-                }
-            }
-        }
-
-        stage('Manual Approval for Apply') {
-            steps {
-                script {
-                    input message: "✅ Review the Terraform plan and approve APPLY?", ok: "Apply Infrastructure"
-                }
-            }
-        }
-
-        stage('Terraform Apply') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "🚀 Deploying infrastructure to AWS..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                        sh 'terraform apply -auto-approve tfplan.out'
-                    }
-                }
-            }
-        }
-
-        // 💡 FIX APPLIED HERE: Added withCredentials wrapper to grant access to the S3 state file.
-        stage('Infra Summary') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "🧾 Capturing Terraform outputs..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                        sh 'terraform output -no-color'
-                    }
-                }
-            }
-        }
-
-        stage('Manual Approval for Destroy') {
-            steps {
-                script {
-                    input message: "⚠️ Do you want to DESTROY all infrastructure?", ok: "Destroy All"
-                }
-            }
-        }
-
-        stage('Terraform Destroy') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "💣 Destroying all resources cleanly..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                        sh 'terraform destroy -auto-approve'
-                    }
-                }
-            }
-        }
+    stage('Verify Tools') {
+      steps {
+        echo "🧩 Verifying Terraform, AWS CLI, and Docker..."
+        sh '''
+          terraform -version
+          aws --version
+          docker --version
+        '''
+      }
     }
 
-    post {
-        success {
-            echo "✅ SUCCESS: Terraform Infra pipeline completed!"
+    stage('Pre-check Existing VPC') {
+      steps {
+        script {
+          echo "🔍 Checking for existing AgriVisionOps VPC..."
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            def vpcCheck = sh(
+              script: """
+                aws ec2 describe-vpcs \
+                  --filters "Name=tag:Project,Values=AgriVisionOps" \
+                  --query "Vpcs[*].VpcId" \
+                  --region ${AWS_REGION} \
+                  --output text || true
+              """,
+              returnStdout: true
+            ).trim()
+            if (vpcCheck) {
+              echo "⚠️ Found existing VPC: ${vpcCheck}. Terraform will reuse it."
+            } else {
+              echo "✅ No existing VPC found. Fresh infra will be created."
+            }
+          }
         }
-        failure {
-            echo "❌ FAILURE: Terraform pipeline failed. Check logs for details."
-        }
-        always {
-            echo "🧹 Cleaning Jenkins workspace..."
-            deleteDir()
-        }
+      }
     }
+
+    stage('Terraform Init') {
+      steps {
+        dir("${TF_DIR}") {
+          echo "⚙️ Initializing Terraform with remote backend..."
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            sh 'terraform init -input=false -force-copy -no-color'
+          }
+        }
+      }
+    }
+
+    stage('Terraform Validate') {
+      steps {
+        dir("${TF_DIR}") {
+          echo "🧠 Validating Terraform configuration..."
+          sh 'terraform validate'
+        }
+      }
+    }
+
+    stage('Terraform Plan') {
+      steps {
+        dir("${TF_DIR}") {
+          echo "🗺️ Generating Terraform Plan..."
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            sh 'terraform plan -input=false -out=tfplan.out'
+          }
+        }
+      }
+    }
+
+    stage('Manual Approval for Apply') {
+      steps {
+        script {
+          input message: "✅ Review the Terraform plan and approve APPLY?", ok: "Apply Infrastructure"
+        }
+      }
+    }
+
+    stage('Terraform Apply') {
+      steps {
+        dir("${TF_DIR}") {
+          echo "🚀 Deploying infrastructure to AWS..."
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            sh 'terraform apply -auto-approve tfplan.out'
+          }
+        }
+      }
+    }
+
+    // 🧠 New: Provision SageMaker Notebook via Terraform target (keeps other infra untouched)
+    stage('Provision SageMaker Notebook (MLOps)') {
+      steps {
+        dir("${TF_DIR}") {
+          echo "🧠 Creating SageMaker Notebook & MLOps infra..."
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            sh '''
+              terraform apply -auto-approve -target=aws_sagemaker_notebook_instance.agrosphere_notebook
+              terraform output -no-color | grep sagemaker_notebook_name || true
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Infra Summary') {
+      steps {
+        dir("${TF_DIR}") {
+          echo "🧾 Capturing Terraform outputs..."
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            sh 'terraform output -no-color'
+          }
+        }
+      }
+    }
+
+    stage('Manual Approval for Destroy') {
+      steps {
+        script {
+          input message: "⚠️ Do you want to DESTROY all infrastructure?", ok: "Destroy All"
+        }
+      }
+    }
+
+    stage('Terraform Destroy') {
+      steps {
+        dir("${TF_DIR}") {
+          echo "💣 Destroying all resources cleanly..."
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            sh 'terraform destroy -auto-approve'
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "✅ SUCCESS: Terraform Infra pipeline completed!"
+    }
+    failure {
+      echo "❌ FAILURE: Terraform pipeline failed. Check logs for details."
+    }
+    always {
+      echo "🧹 Cleaning Jenkins workspace..."
+      deleteDir()
+    }
+  }
 }

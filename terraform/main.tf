@@ -184,6 +184,51 @@ resource "aws_security_group" "ecs_service_sg" {
 }
 
 ############################################
+# 6️⃣ SageMaker Notebook + Model Infra (MLOps Layer)
+############################################
+
+# 📁 Dedicated S3 bucket for model artifacts (optional, separate from data)
+resource "aws_s3_bucket" "agri_model_artifacts" {
+  bucket        = "agrivisionops-model-artifacts"
+  force_destroy = true
+  tags = { Project = "AgriVisionOps" }
+}
+
+# 🧠 SageMaker Notebook Instance
+resource "aws_sagemaker_notebook_instance" "agrosphere_notebook" {
+  name          = "agrosphere-notebook"
+  instance_type = "ml.t3.medium"
+  role_arn      = aws_iam_role.sagemaker_role.arn
+  tags = {
+    Project = "AgriVisionOps"
+    Purpose = "Model-Training"
+  }
+}
+
+# 🔐 Allow ECS backend to call SageMaker for inference
+resource "aws_iam_policy" "ecs_invoke_sagemaker" {
+  name   = "ECSInvokeSageMakerPolicy"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "sagemaker:InvokeEndpoint",
+          "sagemaker:DescribeEndpoint"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_invoke_sagemaker_attach" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = aws_iam_policy.ecs_invoke_sagemaker.arn
+}
+
+############################################
 # 📤 Outputs
 ############################################
 
@@ -194,3 +239,5 @@ output "s3_bucket"             { value = aws_s3_bucket.agri_data.bucket }
 output "sns_topic_arn"         { value = aws_sns_topic.irrigation_alerts.arn }
 output "vpc_id"                { value = module.vpc.vpc_id }
 output "ecs_security_group"    { value = aws_security_group.ecs_service_sg.id }
+output "sagemaker_notebook_name" { value = aws_sagemaker_notebook_instance.agrosphere_notebook.name }
+output "model_artifact_bucket" { value = aws_s3_bucket.agri_model_artifacts.bucket }
