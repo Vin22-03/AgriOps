@@ -2,14 +2,13 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION       = "us-east-1"                      // 🌎 AWS region
-        TF_DIR           = "terraform"                      // 📂 Terraform folder
-        AWS_CREDENTIALS  = credentials('aws-creds')          // 🔐 Jenkins AWS credentials
-        GIT_CREDENTIALS  = 'github-creds'                   // 🔐 Jenkins GitHub credentials
+        AWS_REGION = "us-east-1"
+        TF_DIR     = "terraform"
+        GIT_CREDENTIALS = 'github-creds'   // ✅ only store ID here
     }
 
     options {
-        disableConcurrentBuilds()                          // avoid backend lock collisions
+        disableConcurrentBuilds()
     }
 
     stages {
@@ -18,8 +17,8 @@ pipeline {
             steps {
                 echo "📦 Cloning AgriVisionOps repository..."
                 git branch: 'main',
-                    credentialsId: "${GIT_CREDENTIALS}",
-                    url: 'https://github.com/Vin22-03/AgriOps.git'
+                    url: 'https://github.com/Vin22-03/AgriOps.git',
+                    credentialsId: "${GIT_CREDENTIALS}"
             }
         }
 
@@ -37,10 +36,10 @@ pipeline {
         stage('Terraform Init') {
             steps {
                 dir("${TF_DIR}") {
-                    echo "⚙️ Initializing Terraform with remote backend..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    echo "⚙️ Initializing Terraform..."
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                         sh '''
-                        terraform init -reconfigure -input=false -no-color || true
+                        terraform init -reconfigure -input=false -no-color
                         '''
                     }
                 }
@@ -50,7 +49,7 @@ pipeline {
         stage('Terraform Validate') {
             steps {
                 dir("${TF_DIR}") {
-                    echo "🧠 Validating Terraform configuration..."
+                    echo "🧠 Validating Terraform..."
                     sh 'terraform validate -no-color'
                 }
             }
@@ -60,7 +59,7 @@ pipeline {
             steps {
                 dir("${TF_DIR}") {
                     echo "🗺️ Generating Terraform plan..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                         sh '''
                         terraform plan -input=false -out=tfplan.out -no-color
                         '''
@@ -69,10 +68,10 @@ pipeline {
             }
         }
 
-        stage('Manual Approval Before Apply') {
+        stage('Approval Before Apply') {
             steps {
                 script {
-                    input message: "⚠️ Review Terraform plan and approve APPLY?", ok: "Apply Infrastructure"
+                    input message: "⚠️ Review Terraform Plan before APPLY?"
                 }
             }
         }
@@ -80,8 +79,8 @@ pipeline {
         stage('Terraform Apply') {
             steps {
                 dir("${TF_DIR}") {
-                    echo "🚀 Applying Terraform configuration..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    echo "🚀 Applying Terraform..."
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                         sh '''
                         terraform apply -auto-approve tfplan.out -no-color
                         '''
@@ -90,61 +89,25 @@ pipeline {
             }
         }
 
-        stage('Post Apply Summary') {
+        stage('Terraform Output Summary') {
             steps {
                 dir("${TF_DIR}") {
-                    echo "🧾 Fetching Terraform outputs..."
-                    sh '''
-                    echo "============================================"
-                    echo "🌿 AgriVisionOps ECS Infra Deployment Summary"
-                    echo "============================================"
-                    terraform output -no-color
-                    '''
+                    echo "🧾 Infra summary..."
+                    sh 'terraform output -no-color'
                 }
             }
         }
-
-        stage('Manual Approval Before Destroy') {
-            when {
-                expression { params.DESTROY_INFRA == true }
-            }
-            steps {
-                script {
-                    input message: "⚠️ Confirm to DESTROY all infrastructure?", ok: "Destroy Everything"
-                }
-            }
-        }
-
-        stage('Terraform Destroy') {
-            when {
-                expression { params.DESTROY_INFRA == true }
-            }
-            steps {
-                dir("${TF_DIR}") {
-                    echo "💣 Destroying infrastructure..."
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                        sh '''
-                        terraform destroy -auto-approve -no-color
-                        '''
-                    }
-                }
-            }
-        }
-    }
-
-    parameters {
-        booleanParam(name: 'DESTROY_INFRA', defaultValue: false, description: 'Set true to destroy all infrastructure after approval')
     }
 
     post {
         success {
-            echo "✅ SUCCESS: Terraform ECS Infrastructure pipeline completed!"
+            echo "✅ SUCCESS: ECS Infra deployed!"
         }
         failure {
-            echo "❌ FAILURE: Check logs for detailed error output."
+            echo "❌ FAILURE: Check pipeline logs for details."
         }
         always {
-            echo "🧹 Cleaning up Jenkins workspace..."
+            echo "🧹 Cleaning Jenkins workspace..."
             deleteDir()
         }
     }
