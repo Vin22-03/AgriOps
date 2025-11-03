@@ -9,8 +9,6 @@ pipeline {
     }
 
     options {
-        timestamps()
-        ansiColor('xterm')
         disableConcurrentBuilds()                          // avoid backend lock collisions
     }
 
