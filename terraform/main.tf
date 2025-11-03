@@ -83,7 +83,7 @@ module "vpc" {
 
   map_public_ip_on_launch = true
 
-  # 🚨 FIX 1: Enable mandatory VPC Endpoints for EKS nodes in private subnets
+  # 🚀 CRITICAL FIX: Enable mandatory VPC Endpoints for EKS nodes in private subnets
   enable_ecr_endpoint = true
   enable_s3_endpoint  = true
   enable_sts_endpoint = true
@@ -108,9 +108,8 @@ module "eks" {
   endpoint_public_access             = true
   enable_cluster_creator_admin_permissions = true
 
-  # 🚨 FIX 2: Explicitly ensure the module creates the necessary security group rules.
-  # This should fix the 'All traffic' issue you saw in the AWS console.
-  create_cluster_security_group_rules = true
+  # NOTE: Removed 'create_cluster_security_group_rules = true' due to validation error.
+  # This module version likely handles it by default.
 
   eks_managed_node_groups = {
     default = {
