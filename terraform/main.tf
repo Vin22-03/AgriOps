@@ -83,16 +83,92 @@ module "vpc" {
 
   map_public_ip_on_launch = true
 
-  # 🚀 CRITICAL FIX: Enable mandatory VPC Endpoints for EKS nodes in private subnets
-  enable_ecr_endpoint = true
-  enable_s3_endpoint  = true
-  enable_sts_endpoint = true
+  tags = { Project = "AgriVisionOps" }
+}
+
+#
+# --- CRITICAL FIX START ---
+#
+
+############################################
+# 3️⃣ Security Group for VPC Endpoints
+############################################
+
+resource "aws_security_group" "vpc_endpoints" {
+  name_prefix = "vpc-endpoints-sg-"
+  vpc_id      = module.vpc.vpc_id
+  description = "Allow private traffic to VPC endpoints"
+
+  # Allow HTTPS from VPC CIDR for Interface Endpoints
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [module.vpc.vpc_cidr_block]
+  }
+
+  # Outbound: Allow all traffic
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = { Project = "AgriVisionOps" }
 }
 
 ############################################
-# 3️⃣ Compute — EKS Cluster
+# 4️⃣ VPC Endpoints — S3, ECR, STS
+############################################
+
+module "vpc_endpoints" {
+  # This uses the correct sub-module pattern for your VPC module version (5.1.2)
+  source  = "terraform-aws-modules/vpc/aws//modules/vpc-endpoints"
+  version = "5.1.2" # Match parent VPC module version
+
+  vpc_id           = module.vpc.vpc_id
+  security_group_ids = [aws_security_group.vpc_endpoints.id]
+  subnet_ids       = module.vpc.private_subnets # Used by Interface Endpoints (ECR/STS)
+
+  endpoints = {
+    # Gateway Endpoint for S3 (Routes added to private route tables)
+    s3 = {
+      service             = "s3"
+      service_type        = "Gateway"
+      route_table_ids     = module.vpc.private_route_table_ids
+      tags                = { Name = "s3-gateway" }
+    },
+    # Interface Endpoint for ECR API (Required to talk to ECR control plane)
+    ecr_api = {
+      service             = "ecr.api"
+      service_type        = "Interface"
+      private_dns_enabled = true
+      tags                = { Name = "ecr-api-interface" }
+    },
+    # Interface Endpoint for ECR DKR (Required to pull images)
+    ecr_dkr = {
+      service             = "ecr.dkr"
+      service_type        = "Interface"
+      private_dns_enabled = true
+      tags                = { Name = "ecr-dkr-interface" }
+    },
+    # Interface Endpoint for STS (Required for IAM authentication/token exchange)
+    sts = {
+      service             = "sts"
+      service_type        = "Interface"
+      private_dns_enabled = true
+      tags                = { Name = "sts-interface" }
+    }
+  }
+}
+
+#
+# --- CRITICAL FIX END ---
+#
+
+############################################
+# 5️⃣ Compute — EKS Cluster
 ############################################
 
 module "eks" {
@@ -102,14 +178,10 @@ module "eks" {
   name               = "agrivisionops-cluster"
   kubernetes_version = "1.30"
   vpc_id             = module.vpc.vpc_id
-  # Cluster ENIs are correctly placed in private subnets
   subnet_ids         = module.vpc.private_subnets 
 
   endpoint_public_access             = true
   enable_cluster_creator_admin_permissions = true
-
-  # NOTE: Removed 'create_cluster_security_group_rules = true' due to validation error.
-  # This module version likely handles it by default.
 
   eks_managed_node_groups = {
     default = {
@@ -117,7 +189,6 @@ module "eks" {
       max_size       = 2
       min_size       = 1
       instance_types = ["t3.small"]
-      # Node group is correctly placed in private subnets
       subnet_ids     = module.vpc.private_subnets 
     }
   }
