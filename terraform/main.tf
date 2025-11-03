@@ -83,6 +83,11 @@ module "vpc" {
 
   map_public_ip_on_launch = true
 
+  # 🚨 FIX 1: Enable mandatory VPC Endpoints for EKS nodes in private subnets
+  enable_ecr_endpoint = true
+  enable_s3_endpoint  = true
+  enable_sts_endpoint = true
+
   tags = { Project = "AgriVisionOps" }
 }
 
@@ -97,10 +102,15 @@ module "eks" {
   name               = "agrivisionops-cluster"
   kubernetes_version = "1.30"
   vpc_id             = module.vpc.vpc_id
-  subnet_ids         = module.vpc.private_subnets
+  # Cluster ENIs are correctly placed in private subnets
+  subnet_ids         = module.vpc.private_subnets 
 
-  endpoint_public_access                   = true
+  endpoint_public_access             = true
   enable_cluster_creator_admin_permissions = true
+
+  # 🚨 FIX 2: Explicitly ensure the module creates the necessary security group rules.
+  # This should fix the 'All traffic' issue you saw in the AWS console.
+  create_cluster_security_group_rules = true
 
   eks_managed_node_groups = {
     default = {
@@ -108,7 +118,8 @@ module "eks" {
       max_size       = 2
       min_size       = 1
       instance_types = ["t3.small"]
-      subnet_ids     = module.vpc.private_subnets
+      # Node group is correctly placed in private subnets
+      subnet_ids     = module.vpc.private_subnets 
     }
   }
 
