@@ -1,8 +1,7 @@
 ############################################
-# 🌾 AgriVisionOps — Unified Terraform Infra
+# 🌾 AgriVisionOps — Unified Terraform Infra (ECS Version)
 # ✅ Single source of truth for production
 # ✅ Remote backend with S3 + DynamoDB
-# ✅ No random suffix (stable names)
 ############################################
 
 terraform {
@@ -46,10 +45,10 @@ resource "aws_sns_topic" "irrigation_alerts" {
 resource "aws_iam_role" "sagemaker_role" {
   name = "sagemaker_execution_role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version = "2012-10-17",
     Statement = [{
-      Effect = "Allow"
-      Principal = { Service = "sagemaker.amazonaws.com" }
+      Effect = "Allow",
+      Principal = { Service = "sagemaker.amazonaws.com" },
       Action = "sts:AssumeRole"
     }]
   })
@@ -86,28 +85,94 @@ module "vpc" {
   tags = { Project = "AgriVisionOps" }
 }
 
-#
-# --- CRITICAL FIX START ---
-#
-
 ############################################
-# 3️⃣ Security Group for VPC Endpoints
+# 3️⃣ ECS Cluster + Execution Role
 ############################################
 
-resource "aws_security_group" "vpc_endpoints" {
-  name_prefix = "vpc-endpoints-sg-"
-  vpc_id      = module.vpc.vpc_id
-  description = "Allow private traffic to VPC endpoints"
+resource "aws_ecs_cluster" "agri_cluster" {
+  name = "agrivisionops-ecs-cluster"
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+  tags = { Project = "AgriVisionOps" }
+}
 
-  # Allow HTTPS from VPC CIDR for Interface Endpoints
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [module.vpc.vpc_cidr_block]
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "ecsTaskExecutionRole-agrivisionops"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = { Service = "ecs-tasks.amazonaws.com" },
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+############################################
+# 4️⃣ ECS Task Definition + Service (Fargate)
+############################################
+
+resource "aws_ecs_task_definition" "agri_task" {
+  family                   = "agrivisionops-task"
+  network_mode              = "awsvpc"
+  requires_compatibilities  = ["FARGATE"]
+  cpu                       = "512"
+  memory                    = "1024"
+  execution_role_arn        = aws_iam_role.ecs_task_execution_role.arn
+  container_definitions     = jsonencode([
+    {
+      name      = "agrivisionops-app",
+      image     = "987686462469.dkr.ecr.us-east-1.amazonaws.com/agrivisionops:latest",
+      essential = true,
+      portMappings = [{
+        containerPort = 8080,
+        hostPort      = 8080,
+        protocol      = "tcp"
+      }]
+    }
+  ])
+}
+
+resource "aws_ecs_service" "agri_service" {
+  name            = "agrivisionops-service"
+  cluster         = aws_ecs_cluster.agri_cluster.id
+  task_definition = aws_ecs_task_definition.agri_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets         = module.vpc.private_subnets
+    assign_public_ip = false
+    security_groups  = [aws_security_group.ecs_service_sg.id]
   }
 
-  # Outbound: Allow all traffic
+  tags = { Project = "AgriVisionOps" }
+}
+
+############################################
+# 5️⃣ Security Group — ECS Service
+############################################
+
+resource "aws_security_group" "ecs_service_sg" {
+  name        = "ecs-service-sg"
+  description = "Allow inbound access for ECS Service"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description = "Allow HTTP traffic"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -119,90 +184,13 @@ resource "aws_security_group" "vpc_endpoints" {
 }
 
 ############################################
-# 4️⃣ VPC Endpoints — S3, ECR, STS
-############################################
-
-module "vpc_endpoints" {
-  # This uses the correct sub-module pattern for your VPC module version (5.1.2)
-  source  = "terraform-aws-modules/vpc/aws//modules/vpc-endpoints"
-  version = "5.1.2" # Match parent VPC module version
-
-  vpc_id           = module.vpc.vpc_id
-  security_group_ids = [aws_security_group.vpc_endpoints.id]
-  subnet_ids       = module.vpc.private_subnets # Used by Interface Endpoints (ECR/STS)
-
-  endpoints = {
-    # Gateway Endpoint for S3 (Routes added to private route tables)
-    s3 = {
-      service             = "s3"
-      service_type        = "Gateway"
-      route_table_ids     = module.vpc.private_route_table_ids
-      tags                = { Name = "s3-gateway" }
-    },
-    # Interface Endpoint for ECR API (Required to talk to ECR control plane)
-    ecr_api = {
-      service             = "ecr.api"
-      service_type        = "Interface"
-      private_dns_enabled = true
-      tags                = { Name = "ecr-api-interface" }
-    },
-    # Interface Endpoint for ECR DKR (Required to pull images)
-    ecr_dkr = {
-      service             = "ecr.dkr"
-      service_type        = "Interface"
-      private_dns_enabled = true
-      tags                = { Name = "ecr-dkr-interface" }
-    },
-    # Interface Endpoint for STS (Required for IAM authentication/token exchange)
-    sts = {
-      service             = "sts"
-      service_type        = "Interface"
-      private_dns_enabled = true
-      tags                = { Name = "sts-interface" }
-    }
-  }
-}
-
-#
-# --- CRITICAL FIX END ---
-#
-
-############################################
-# 5️⃣ Compute — EKS Cluster
-############################################
-
-module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "21.8.0"
-
-  name               = "agrivisionops-cluster"
-  kubernetes_version = "1.30"
-  vpc_id             = module.vpc.vpc_id
-  subnet_ids         = module.vpc.private_subnets 
-
-  endpoint_public_access             = true
-  enable_cluster_creator_admin_permissions = true
-
-  eks_managed_node_groups = {
-    default = {
-      desired_size   = 1
-      max_size       = 2
-      min_size       = 1
-      instance_types = ["t3.small"]
-      subnet_ids     = module.vpc.private_subnets 
-    }
-  }
-
-  tags = { Project = "AgriVisionOps" }
-}
-
-############################################
 # 📤 Outputs
 ############################################
 
-output "s3_bucket"          { value = aws_s3_bucket.agri_data.bucket }
-output "sns_topic_arn"      { value = aws_sns_topic.irrigation_alerts.arn }
-output "sagemaker_role_arn" { value = aws_iam_role.sagemaker_role.arn }
-output "vpc_id"             { value = module.vpc.vpc_id }
-output "eks_cluster_name"   { value = module.eks.cluster_name }
-output "eks_cluster_endpoint" { value = module.eks.cluster_endpoint }
+output "ecs_cluster_name"      { value = aws_ecs_cluster.agri_cluster.name }
+output "ecs_service_name"      { value = aws_ecs_service.agri_service.name }
+output "ecs_task_family"       { value = aws_ecs_task_definition.agri_task.family }
+output "s3_bucket"             { value = aws_s3_bucket.agri_data.bucket }
+output "sns_topic_arn"         { value = aws_sns_topic.irrigation_alerts.arn }
+output "vpc_id"                { value = module.vpc.vpc_id }
+output "ecs_security_group"    { value = aws_security_group.ecs_service_sg.id }
