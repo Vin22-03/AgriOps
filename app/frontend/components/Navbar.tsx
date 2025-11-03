@@ -45,6 +45,9 @@ export default function Navbar() {
         <Link href="/about" className="hover:text-green-200 transition">
           🌍 About
         </Link>
+        <Link href="/Krishi(AI)" className="hover:text-green-200 transition">
+          💭 Krishi(AI)
+        </Link>
       </div>
     </nav>
   );

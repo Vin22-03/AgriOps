@@ -17,13 +17,19 @@ export default function AnalyticsPage() {
   const [yieldData, setYieldData] = useState<any[]>([]);
   const [costData, setCostData] = useState<any[]>([]);
   const [healthData, setHealthData] = useState<any[]>([]);
+  const [latestPrediction, setLatestPrediction] = useState<string | null>(null);
 
-  // 🧠 Generate dummy analytics
+  // 🧠 Load saved prediction from localStorage
+  useEffect(() => {
+    const stored = localStorage.getItem("lastPrediction");
+    if (stored) setLatestPrediction(stored);
+  }, []);
+
+  // 🌾 Generate dummy analytics for visualization
   useEffect(() => {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
     const farms = ["Green Valley", "Sunrise Agro", "EcoHarvest"];
 
-    // Yield per farm
     const yieldArr = months.map((m) => ({
       month: m,
       "Green Valley": 25 + Math.random() * 10,
@@ -31,7 +37,6 @@ export default function AnalyticsPage() {
       "EcoHarvest": 18 + Math.random() * 15,
     }));
 
-    // Cost distribution
     const costArr = farms.map((f) => ({
       name: f,
       operations: 4000 + Math.random() * 2000,
@@ -39,7 +44,6 @@ export default function AnalyticsPage() {
       water: 1000 + Math.random() * 500,
     }));
 
-    // AI Crop Health Index (scale 0–100)
     const healthArr = farms.map((f) => ({
       name: f,
       health: 70 + Math.random() * 25,
@@ -55,6 +59,17 @@ export default function AnalyticsPage() {
       <h1 className="text-4xl font-bold text-green-900 mb-8 drop-shadow-sm">
         📈 AgroSphere Analytics Dashboard
       </h1>
+
+      {/* 🧠 Latest AI Prediction Summary */}
+      {latestPrediction && (
+        <div className="bg-green-100 border border-green-300 text-green-800 p-5 rounded-2xl shadow-lg mb-10 w-[90%] md:w-[600px] text-center">
+          <h2 className="text-xl font-bold mb-2">🌿 Latest AI Prediction</h2>
+          <p className="text-lg">{latestPrediction}</p>
+          <p className="text-sm text-gray-600 mt-2">
+            (Generated from SageMaker via FastAPI)
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-10 w-[90%] md:w-[80%]">
 
