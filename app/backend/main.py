@@ -2,21 +2,28 @@ from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from typing import Dict
 from fastapi.middleware.cors import CORSMiddleware
+import boto3
+import json
+import os
+from dotenv import load_dotenv
+
 # ---------------------------------------------
 # 🌾 AgriVisionOps Backend API
-# Phase 1 – Mock + Structure Setup
+# Phase 4 – Real SageMaker Integration
 # ---------------------------------------------
+
+load_dotenv()
 
 app = FastAPI(
     title="AgriVisionOps API",
-    version="0.1.0",
-    description="AI-powered predictive agriculture platform (FastAPI backend)"
+    version="1.0.0",
+    description="AI-powered predictive agriculture platform (FastAPI backend + SageMaker)",
 )
 
-# ✅ Allow frontend (localhost:3000) to access backend (8090)
+# ✅ Allow frontend (Next.js) to access backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000"],  # add your domain later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,6 +38,13 @@ class SensorData(BaseModel):
     soil_moisture: float
 
 
+class InputData(BaseModel):
+    temperature: float
+    humidity: float
+    moisture: float
+    ph: float
+
+
 # ----------- ROUTES -----------
 
 @app.get("/")
@@ -38,7 +52,7 @@ def root():
     return {
         "message": "Welcome to AgriVisionOps 🌱",
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
     }
 
 
@@ -47,45 +61,82 @@ def health():
     return {
         "status": "ok",
         "service": "agri-vision-ops-api",
-        "version": "0.1.0"
+        "version": "1.0.0",
     }
 
 
+# ✅ Real AI Prediction Route
 @app.post("/api/v1/predict")
-async def predict(file: UploadFile = File(...)) -> Dict:
+async def predict(data: InputData) -> Dict:
     """
-    Simulates sending image to SageMaker model.
-    Later this will call the actual SageMaker endpoint.
+    Sends sensor data to SageMaker endpoint for real-time irrigation prediction.
     """
+    try:
+        client = boto3.client("sagemaker-runtime", region_name="us-east-1")
+
+        # Prepare payload for SageMaker
+        payload = json.dumps({
+            "temperature": data.temperature,
+            "humidity": data.humidity,
+            "moisture": data.moisture,
+            "ph": data.ph
+        })
+
+        # Invoke SageMaker endpoint
+        response = client.invoke_endpoint(
+            EndpointName=os.getenv("SAGEMAKER_ENDPOINT_NAME", "agrosphere-irrigation-endpoint-v2"),
+            ContentType="application/json",
+            Body=payload
+        )
+
+        result = response["Body"].read().decode("utf-8")
+
+        # Try parsing JSON, else fallback to string
+        try:
+            result_json = json.loads(result)
+            prediction = result_json.get("prediction", result)
+        except:
+            prediction = result
+
+        return {
+            "prediction": prediction,
+            "model_used": os.getenv("SAGEMAKER_ENDPOINT_NAME"),
+            "status": "success"
+        }
+
+    except Exception as e:
+        print("❌ SageMaker Error:", e)
+        return {
+            "error": str(e),
+            "prediction": "AI model currently unavailable",
+            "status": "failed"
+        }
+
+
+# ✅ File Upload (kept from mock version for future image models)
+@app.post("/api/v1/predict-file")
+async def predict_file(file: UploadFile = File(...)) -> Dict:
     contents = await file.read()
     size_kb = round(len(contents) / 1024, 2)
-    # Mock inference
     return {
-        "prediction": "Healthy Crop 🌿",
+        "prediction": "Healthy Crop 🌿 (mock)",
         "confidence": 0.93,
-        "model_used": "sagemaker-agri-v1 (mock)",
-        "file_size_kb": size_kb
+        "file_size_kb": size_kb,
     }
 
 
+# ✅ Sensor ingestion
 @app.post("/api/v1/sensor-ingest")
 async def sensor_ingest(data: SensorData):
-    """
-    Simulates sensor data ingestion.
-    Later: store to S3, RDS, or stream via Kinesis.
-    """
     return {
         "message": "Sensor data ingested successfully 🌦️",
-        "data": data
+        "data": data,
     }
 
 
+# ✅ Mock farms list
 @app.get("/api/v1/farms")
 def get_farms():
-    """
-    Mock endpoint for listing registered farms.
-    Later this can connect to a real DB.
-    """
     farms = [
         {"id": "farm001", "name": "Green Valley", "location": "Karnataka"},
         {"id": "farm002", "name": "Sunrise Fields", "location": "Maharashtra"},
@@ -94,15 +145,11 @@ def get_farms():
     return {"count": len(farms), "farms": farms}
 
 
-# ----------- OPTIONAL: TEST METRICS -----------
-
+# ✅ Mock metrics endpoint (for Prometheus later)
 @app.get("/metrics")
 def metrics():
-    """
-    Mock metrics endpoint (for Prometheus later).
-    """
     return {
         "total_requests": 42,
         "avg_latency_ms": 12,
-        "uptime_percent": 99.8
+        "uptime_percent": 99.8,
     }
