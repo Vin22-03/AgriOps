@@ -5,7 +5,7 @@ pipeline {
     timestamps()
     ansiColor('xterm')
     // Disabling concurrent builds is safe for deployment pipelines
-    disableConcurrentBuilds() 
+    disableConcurrentBuilds()
   }
 
   // Define global environment variables. They will be populated in the 'Fetch Terraform Outputs' stage.
@@ -16,7 +16,9 @@ pipeline {
     CLUSTER_NAME = 'agrivisionops-ecs-cluster'
     BACKEND_SERVICE_NAME = ''
     FRONTEND_SERVICE_NAME = ''
-    ECR_URI = '' 
+    // NEW: We will now store the FULL ECR URIs for each repository, not just a base URI.
+    BACKEND_ECR_URI = ''
+    FRONTEND_ECR_URI = ''
     PUBLIC_URL = ''
   }
 
@@ -38,29 +40,36 @@ pipeline {
             echo "📋 Initializing Terraform backend & fetching outputs..."
             script {
               // Initialize Terraform safely (requires access to S3 backend state)
-              // We capture returnStatus here to ensure the command ran, but rely on .trim().isEmpty() for output content check.
+              // Added returnStatus: true to allow subsequent steps to continue even if terraform init has minor warnings.
               sh(script: 'terraform init -input=false -no-color', returnStatus: true)
 
-              // Capture Terraform outputs using -raw
-              def alb_dns_name  = sh(script: "terraform output -raw alb_dns_name", returnStdout: true).trim()
-              def backendSvc    = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
-              def frontendSvc   = sh(script: "terraform output -raw frontend_service_name", returnStdout: true).trim()
+              // Capture all necessary Terraform outputs using -raw
+              def alb_dns_name = sh(script: "terraform output -raw public_url", returnStdout: true).trim()
+              def backendSvc = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
+              def frontendSvc = sh(script: "terraform output -raw frontend_service_name", returnStdout: true).trim()
               
+              // CRITICAL FIX: Fetch the complete, specific ECR URIs from the outputs
+              def backendEcrUri = sh(script: "terraform output -raw backend_ecr_uri", returnStdout: true).trim()
+              def frontendEcrUri = sh(script: "terraform output -raw frontend_ecr_uri", returnStdout: true).trim()
+
               // --- CRITICAL SAFETY CHECK: Ensure outputs were found ---
-              if (alb_dns_name.isEmpty() || backendSvc.isEmpty() || frontendSvc.isEmpty()) {
-                  // This error is crucial, as the pipeline must halt if the infra is not found.
-                  error("❌ Terraform outputs are empty. The infrastructure required for deployment is missing. Ensure 'terraform apply' has run successfully in the 'terraform' directory and the state file is accessible.")
+              if (backendEcrUri.isEmpty() || frontendEcrUri.isEmpty() || backendSvc.isEmpty() || frontendSvc.isEmpty()) {
+                  error("❌ Terraform outputs are missing or empty. Required outputs: backend_ecr_uri, frontend_ecr_uri, backend_service_name, frontend_service_name. Check your infrastructure state.")
               }
               // --- END SAFETY CHECK ---
 
               // Explicitly assign values to global environment variables
-              env.PUBLIC_URL = "http://${String.valueOf(alb_dns_name)}"
+              env.PUBLIC_URL = String.valueOf(alb_dns_name)
               env.BACKEND_SERVICE_NAME = String.valueOf(backendSvc)
               env.FRONTEND_SERVICE_NAME = String.valueOf(frontendSvc)
+              
+              // Assigning the captured ECR URIs
+              env.BACKEND_ECR_URI = String.valueOf(backendEcrUri)
+              env.FRONTEND_ECR_URI = String.valueOf(frontendEcrUri)
 
               echo "✅ ALB DNS: ${env.PUBLIC_URL}"
-              echo "✅ Backend Service: ${env.BACKEND_SERVICE_NAME}"
-              echo "✅ Frontend Service: ${env.FRONTEND_SERVICE_NAME}"
+              echo "✅ Backend ECR: ${env.BACKEND_ECR_URI}"
+              echo "✅ Frontend ECR: ${env.FRONTEND_ECR_URI}"
             }
           }
         }
@@ -73,42 +82,17 @@ pipeline {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "🔐 Logging into ECR..."
             
-            // Initialize with empty string to prevent Groovy 'null' interpolation issues
-            def awsAccountId = '' 
+            // Derive the ECR registry URI root from the fetched full URI
+            // E.g., extracts "987686462469.dkr.ecr.us-east-1.amazonaws.com" from the full URI
+            def fullBackendUri = env.BACKEND_ECR_URI
+            def ecrRegistryUri = fullBackendUri.substring(0, fullBackendUri.indexOf('/'))
             
-            try {
-              // Capture AWS Account ID using robust sh call.
-              awsAccountId = sh(
-                script: 'aws sts get-caller-identity --query Account --output text',
-                returnStdout: true
-              ).trim()
-              
-              // --- DEBUG STEP: Log the raw captured value ---
-              echo "🔎 Captured AWS Account ID (Raw): '${awsAccountId}'"
-              // ---------------------------------------------
-
-            } catch (e) {
-                // Fail immediately and explicitly if the AWS CLI call fails.
-                error("❌ Failed to execute AWS CLI command to get Account ID. Check 'aws-creds' permissions, network access, and IAM policies. Error: ${e.getMessage()}")
-            }
+            // Set a temporary environment variable for the registry root for cleaner shell access
+            env.ECR_REGISTRY_URI = ecrRegistryUri
+            echo "✅ ECR Registry URI set to: ${env.ECR_REGISTRY_URI}"
             
-            // --- CRITICAL SAFETY CHECK: Check for empty string ---
-            if (awsAccountId.isEmpty()) {
-                // This catches the case where the command ran, but the output was empty (e.g., IAM permissions issue).
-                error("❌ AWS Account ID is empty. The AWS CLI command ran but returned no output. This is usually an IAM permission issue or a networking problem preventing AWS STS API access.")
-            }
-            // --- END SAFETY CHECK ---
-            
-            // --- ECR URI FIX ---
-            // Explicitly build the ECR URI using concatenation to prevent Groovy interpolation failure.
-            def ecr_uri_val = String.valueOf(awsAccountId) + ".dkr.ecr." + env.AWS_DEFAULT_REGION + ".amazonaws.com"
-            env.ECR_URI = ecr_uri_val
-            // --- END FIX ---
-
-            echo "✅ ECR URI set to: ${env.ECR_URI}"
-            
-            // Perform Docker login
-            sh "aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${env.ECR_URI}"
+            // Perform Docker login using the derived registry URI
+            sh "aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${env.ECR_REGISTRY_URI}"
           }
         }
       }
@@ -124,20 +108,20 @@ pipeline {
             # -------------------- BACKEND --------------------
             docker build -t ${env.BACKEND_REPO_NAME}:${tag} ./app/backend
 
-            # Tag for ECR with specific build number
-            docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:${tag}
+            # Tag for ECR with specific build number (using the full URI directly)
+            docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.BACKEND_ECR_URI}:${tag}
             
             # Tag for ECR with 'latest' (for deployment)
-            docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:latest
+            docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.BACKEND_ECR_URI}:latest
 
             # -------------------- FRONTEND --------------------
             docker build -t ${env.FRONTEND_REPO_NAME}:${tag} ./app/frontend
 
-            # Tag for ECR with specific build number
-            docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:${tag}
+            # Tag for ECR with specific build number (using the full URI directly)
+            docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.FRONTEND_ECR_URI}:${tag}
             
             # Tag for ECR with 'latest' (for deployment)
-            docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:latest
+            docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.FRONTEND_ECR_URI}:latest
           """
         }
       }
@@ -148,27 +132,30 @@ pipeline {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
             echo "⬆️ Pushing images to ECR..."
-            docker push ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:latest
-            docker push ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:latest
+            # Use the specific, full repository URIs for pushing
+            docker push ${env.BACKEND_ECR_URI}:latest
+            docker push ${env.FRONTEND_ECR_URI}:latest
           """
         }
       }
     }
 
+    // ... (Deploy to ECS and Verify Deployment stages remain the same, using the correctly set service names) ...
+    
     stage('Deploy to ECS (Backend & Frontend)') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
             echo "🚀 Updating backend service..."
-            aws ecs update-service \
-              --cluster ${env.CLUSTER_NAME} \
-              --service ${env.BACKEND_SERVICE_NAME} \
+            aws ecs update-service \\
+              --cluster ${env.CLUSTER_NAME} \\
+              --service ${env.BACKEND_SERVICE_NAME} \\
               --force-new-deployment
 
             echo "🎨 Updating frontend service..."
-            aws ecs update-service \
-              --cluster ${env.CLUSTER_NAME} \
-              --service ${env.FRONTEND_SERVICE_NAME} \
+            aws ecs update-service \\
+              --cluster ${env.CLUSTER_NAME} \\
+              --service ${env.FRONTEND_SERVICE_NAME} \\
               --force-new-deployment
           """
         }
@@ -180,15 +167,16 @@ pipeline {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           echo "🔎 Verifying ECS service health..."
           sh """
-            aws ecs describe-services --cluster ${env.CLUSTER_NAME} \
-              --services ${env.BACKEND_SERVICE_NAME} ${env.FRONTEND_SERVICE_NAME} \
-              --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \
+            aws ecs describe-services --cluster ${env.CLUSTER_NAME} \\
+              --services ${env.BACKEND_SERVICE_NAME} ${env.FRONTEND_SERVICE_NAME} \\
+              --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \\
               --output table
           """
           echo "🌍 Application accessible at: ${env.PUBLIC_URL}"
         }
       }
     }
+
   }
 
   post {
@@ -202,7 +190,7 @@ pipeline {
     always {
       echo "🧹 Cleaning up local Docker artifacts..."
       // Use '|| true' to prevent failure if docker command fails (e.g., no space to reclaim)
-      sh 'docker system prune -f || true' 
+      sh 'docker system prune -f || true'
     }
   }
 }
