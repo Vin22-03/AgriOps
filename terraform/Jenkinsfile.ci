@@ -13,7 +13,7 @@ pipeline {
     FRONTEND_REPO_NAME = 'agrivisionops-frontend'
     CLUSTER_NAME = 'agrivisionops-ecs-cluster'
 
-    // Dynamic values fetched from Terraform
+    // Will be dynamically populated
     BACKEND_SERVICE_NAME = ''
     FRONTEND_SERVICE_NAME = ''
     BACKEND_ECR_URI = ''
@@ -39,40 +39,31 @@ pipeline {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "📋 Fetching Terraform outputs from remote S3 backend..."
             script {
-              // ✅ Initialize Terraform backend & sync remote state
+              // Initialize and refresh Terraform state
               sh '''
                 terraform init -input=false -no-color
                 terraform refresh -no-color
               '''
 
-              // ✅ Fetch JSON output safely (write to file)
-              sh 'terraform output -json > tf_outputs.json 2>&1'
-              def jsonText = readFile('tf_outputs.json').trim()
+              // ✅ Fetch each output using -raw (no sandbox issues)
+              env.PUBLIC_URL            = sh(script: 'terraform output -raw public_url || true', returnStdout: true).trim()
+              env.BACKEND_SERVICE_NAME  = sh(script: 'terraform output -raw backend_service_name || true', returnStdout: true).trim()
+              env.FRONTEND_SERVICE_NAME = sh(script: 'terraform output -raw frontend_service_name || true', returnStdout: true).trim()
+              env.BACKEND_ECR_URI       = sh(script: 'terraform output -raw ecr_backend_repo_url || true', returnStdout: true).trim()
+              env.FRONTEND_ECR_URI      = sh(script: 'terraform output -raw ecr_frontend_repo_url || true', returnStdout: true).trim()
 
-              // ✅ Parse JSON directly (no plugin dependency)
-              def parsed = new groovy.json.JsonSlurperClassic().parseText(jsonText)
-
-              // ✅ Assign environment variables from parsed JSON
-              env.PUBLIC_URL            = parsed.public_url?.value ?: ''
-              env.BACKEND_SERVICE_NAME  = parsed.backend_service_name?.value ?: ''
-              env.FRONTEND_SERVICE_NAME = parsed.frontend_service_name?.value ?: ''
-              env.BACKEND_ECR_URI       = parsed.ecr_backend_repo_url?.value ?: ''
-              env.FRONTEND_ECR_URI      = parsed.ecr_frontend_repo_url?.value ?: ''
-
-              echo "🧾 DEBUG VALUES (from Terraform S3 state):"
+              echo "🧾 DEBUG VALUES (direct -raw fetch):"
               echo "PUBLIC_URL: ${env.PUBLIC_URL}"
               echo "BACKEND_ECR_URI: ${env.BACKEND_ECR_URI}"
               echo "FRONTEND_ECR_URI: ${env.FRONTEND_ECR_URI}"
 
               if (!env.BACKEND_ECR_URI || !env.FRONTEND_ECR_URI) {
-                error("❌ Failed to fetch outputs from Terraform remote state. Check Phase 1 apply or S3 access.")
+                error("❌ Missing Terraform outputs. Check remote state or output names.")
               }
 
               echo "✅ ALB/Public URL: ${env.PUBLIC_URL}"
               echo "✅ Backend Service: ${env.BACKEND_SERVICE_NAME}"
               echo "✅ Frontend Service: ${env.FRONTEND_SERVICE_NAME}"
-              echo "✅ Backend ECR URI: ${env.BACKEND_ECR_URI}"
-              echo "✅ Frontend ECR URI: ${env.FRONTEND_ECR_URI}"
             }
           }
         }
@@ -103,7 +94,7 @@ pipeline {
       steps {
         script {
           def tag = "build-${env.BUILD_NUMBER}"
-          echo "🚧 Building backend & frontend Docker images with tag: ${tag}"
+          echo "🚧 Building backend & frontend images with tag: ${tag}"
 
           sh """
             # BACKEND
@@ -125,7 +116,7 @@ pipeline {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
-            echo "⬆️ Pushing images to ECR..."
+            echo "⬆️ Pushing Docker images to ECR..."
             docker push ${env.BACKEND_ECR_URI}:latest
             docker push ${env.FRONTEND_ECR_URI}:latest
           """
@@ -138,7 +129,7 @@ pipeline {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
-            echo "🚀 Updating ECS services with latest images..."
+            echo "🚀 Triggering new ECS deployments..."
             aws ecs update-service \
               --cluster ${env.CLUSTER_NAME} \
               --service ${env.BACKEND_SERVICE_NAME} \
