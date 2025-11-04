@@ -9,7 +9,7 @@ export default function AboutPage() {
             ☁️ <span className="text-amber-700">AgroSphere</span>
           </h1>
           <p className="italic text-gray-600">
-            “Where AI, Cloud & DevOps Speak the Same Language”
+            “Where AI & Soil Speak the Same Language”
           </p>
 
           {/* 🎯 Objectives */}
@@ -18,10 +18,11 @@ export default function AboutPage() {
               🎯 Core Objective
             </h2>
             <ul className="list-disc list-inside text-sm space-y-1">
-              <li>Showcase AWS Cloud + DevOps + MLOps integration end-to-end.</li>
-              <li>Automate CI/CD with Jenkins → Terraform → ECS Fargate.</li>
-              <li>Demonstrate SageMaker inference via FastAPI backend.</li>
-              <li>Provide a themed, data-driven dashboard built with Next.js.</li>
+              <li>Demonstrate AWS Cloud + DevOps + MLOps integration end-to-end.</li>
+              <li>Automate CI/CD pipeline via Jenkins → Terraform → ECS Fargate.</li>
+              <li>Showcase SageMaker-based AI inference through FastAPI backend.</li>
+              <li>Integrate an intelligent Bedrock-powered chatbot for farmers.</li>
+              <li>Deliver a rich, analytics-driven dashboard built with Next.js.</li>
             </ul>
           </div>
 
@@ -33,11 +34,12 @@ export default function AboutPage() {
             <div className="grid grid-cols-2 gap-x-4 text-sm">
               <p>🐍 FastAPI (Backend API)</p>
               <p>🌿 Next.js + Tailwind (Frontend)</p>
-              <p>🐳 Docker + ECR (Container Registry)</p>
+              <p>🐳 Docker + AWS ECR (Container Registry)</p>
               <p>☁️ AWS ECS Fargate (Serverless Compute)</p>
               <p>🤖 SageMaker (AI Model Inference)</p>
               <p>🧱 Terraform + Jenkins (CI/CD Pipeline)</p>
               <p>🔔 SNS + CloudWatch (Alerts & Monitoring)</p>
+              <p>🧠 Bedrock + Titan (AI Chatbot Assistant)</p>
               <p>📊 Recharts / Grafana (Visualization)</p>
             </div>
           </div>
@@ -50,9 +52,10 @@ export default function AboutPage() {
           </div>
         </div>
 
-        {/* 📊 Right Panel – Infographic */}
+        {/* 📊 Right Panel – Architecture & AI */}
         <div className="md:w-1/2 flex flex-col justify-between space-y-6">
-          {/* Architecture Box */}
+
+          {/* ☁️ Architecture */}
           <div className="bg-green-100/70 border-l-4 border-green-500 rounded-xl p-5 shadow-sm">
             <h3 className="font-semibold text-green-700 mb-2">
               ☁️ Cloud Architecture Flow
@@ -61,33 +64,44 @@ export default function AboutPage() {
               GitHub → Jenkins → Terraform → ECS Fargate → FastAPI Backend ↔ Next.js Frontend ↔ SageMaker AI Endpoint → CloudWatch/Grafana Monitoring
             </p>
             <p className="mt-2 text-xs text-gray-500">
-              *Infrastructure fully automated with Terraform & Jenkins*
+              *Infrastructure fully automated with Terraform & Jenkins pipelines*
             </p>
           </div>
 
-          {/* MLOps Simulation */}
+          {/* 🧠 MLOps */}
           <div className="bg-amber-100/70 border-l-4 border-amber-500 rounded-xl p-5 shadow-sm">
             <h3 className="font-semibold text-amber-700 mb-2">🧠 MLOps Integration</h3>
             <ul className="list-disc list-inside text-sm space-y-1 text-gray-700">
-              <li>Inputs : temperature, humidity, soil-moisture.</li>
-              <li>Model : SageMaker XGBoost (simulated for demo).</li>
-              <li>Outputs : crop health, irrigation advice, confidence score.</li>
-              <li>API served via FastAPI → consumed by Next.js.</li>
+              <li>Inputs: temperature, humidity, soil-moisture, pH.</li>
+              <li>Model: RandomForest deployed via AWS SageMaker.</li>
+              <li>Outputs: crop health, irrigation need, confidence score.</li>
+              <li>Served through FastAPI backend → Consumed by Next.js UI.</li>
             </ul>
           </div>
 
-          {/* KPI Summary */}
+          {/* 💬 Krishi AI Advisor */}
+          <div className="bg-blue-100/70 border-l-4 border-blue-500 rounded-xl p-5 shadow-sm">
+            <h3 className="font-semibold text-blue-700 mb-2">💬 Krishi — AI Agriculture Chatbot</h3>
+            <p className="text-sm text-gray-700 leading-relaxed">
+              <b>Krishi</b> is an intelligent virtual advisor built using <b>AWS Bedrock</b> and <b>Titan LLM</b>, capable of answering real-time queries about crop health, irrigation schedules, soil nutrients, and modern farming practices.
+            </p>
+            <p className="text-xs mt-2 text-gray-500 italic">
+              *Integrates natural language AI with the agriculture data ecosystem — making AgroSphere interactive and intelligent.*
+            </p>
+          </div>
+
+          {/* 📈 Impact */}
           <div className="bg-emerald-100/70 border-l-4 border-emerald-600 rounded-xl p-5 shadow-sm">
             <h3 className="font-semibold text-emerald-700 mb-2">📈 Automation Impact</h3>
             <ul className="text-sm space-y-1 text-gray-700">
-              <li>🚀 Deploy time ↓ to 2 min (vs 15 min manual)</li>
-              <li>💰 Infra cost ↓ 60% with Fargate</li>
+              <li>🚀 Deployment time ↓ from 15 min → 2 min</li>
+              <li>💰 Infrastructure cost ↓ 60% using Fargate</li>
               <li>⚙️ CI/CD success rate ↑ 99.5%</li>
-              <li>📦 Zero-downtime updates via rolling tasks</li>
+              <li>📦 Zero-downtime rollouts & scalable AI inference</li>
             </ul>
           </div>
 
-          {/* Tagline Box */}
+          {/* 🌱 Closing Tagline */}
           <div className="bg-green-700 text-white text-center py-4 rounded-xl shadow-md">
             <p className="font-semibold text-sm">
               Bridging Cloud, DevOps & AI — One Pipeline at a Time 🌱

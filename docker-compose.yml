@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./app/backend
+    container_name: agrivision-backend
+    ports:
+      - "8090:8090"
+    env_file:
+      - ./app/backend/.env
+    environment:
+      - AWS_REGION=us-east-1
+    restart: always
+
+  frontend:
+    build: ./app/frontend
+    container_name: agrivision-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      # Point frontend to backend container
+      - NEXT_PUBLIC_BACKEND_URL=http://backend:8090
+    restart: always
