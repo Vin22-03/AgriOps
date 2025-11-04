@@ -54,22 +54,39 @@ pipeline {
       }
     }
 
-    stage('AWS ECR Login') {
-      steps {
-        script {
-          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-            echo "🔐 Logging into ECR..."
-            def awsAccountId = sh(
-              script: 'aws sts get-caller-identity --query Account --output text',
-              returnStdout: true
-            ).trim()
-            env.ECR_URI = "${awsAccountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
-            echo "✅ ECR URI set to: ${env.ECR_URI}"
-            sh "aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${env.ECR_URI}"
-          }
+stage('AWS ECR Login') {
+  steps {
+    script {
+      withCredentials([
+        [$class: 'AmazonWebServicesCredentialsBinding', 
+         credentialsId: 'aws-creds', 
+         accessKeyVariable: 'AWS_ACCESS_KEY_ID', 
+         secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+      ]) {
+        echo "🔐 Logging into ECR..."
+
+        // 🧠 Get AWS Account ID (this must now always return your ID)
+        def awsAccountId = sh(
+          script: "aws sts get-caller-identity --query Account --output text",
+          returnStdout: true
+        ).trim()
+
+        if (!awsAccountId) {
+          error "❌ AWS Account ID not found! Check your credentials or IAM permissions."
         }
+
+        env.ECR_URI = "${awsAccountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
+        echo "✅ ECR URI set to: ${env.ECR_URI}"
+
+        // 🪣 Login securely to ECR
+        sh """
+          aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} \
+            | docker login --username AWS --password-stdin ${env.ECR_URI}
+        """
       }
     }
+  }
+}
 
     stage('Build & Tag Docker Images') {
       steps {
