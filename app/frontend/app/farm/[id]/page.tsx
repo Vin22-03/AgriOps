@@ -71,7 +71,7 @@ export default function FarmDetailsPage() {
     setAiResult("");
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/predict", {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/predict`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -145,13 +145,13 @@ export default function FarmDetailsPage() {
 
         {/* 🧠 AI Crop Health */}
         <div
-          className={`mb-8 py-4 rounded-xl shadow-inner border text-lg font-semibold ${
-            isIrrigation
-              ? "bg-blue-100 border-blue-300 text-blue-800"
-              : aiResult
-              ? "bg-green-100 border-green-300 text-green-800"
-              : "bg-gray-50 border-gray-200 text-gray-700"
-          }`}
+         className={`mb-8 py-4 rounded-xl shadow-inner border text-lg font-semibold ${
+  isIrrigation
+    ? "bg-blue-100 border-blue-300 text-blue-800"
+    : aiResult
+    ? "bg-green-100 border-green-300 text-green-800"
+    : "bg-gray-50 border-gray-200 text-gray-700"
+}`}
         >
           🧠 <b>AI Crop Status:</b>{" "}
           {aiResult

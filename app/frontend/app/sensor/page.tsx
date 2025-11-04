@@ -24,7 +24,7 @@ export default function SensorPage() {
   // Fetch or simulate IoT data
   const fetchSensorData = async () => {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/sensors");
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/sensors`);
       if (!res.ok) throw new Error("Backend not ready, using simulated data");
       const json = await res.json();
       setData(json.data || []);
