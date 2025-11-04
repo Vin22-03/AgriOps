@@ -127,6 +127,31 @@ resource "aws_cloudwatch_log_group" "ecs_frontend_logs" {
   retention_in_days = 14
   tags = { Project = "AgriVisionOps" }
 }
+############################################
+# 🪣 4️⃣-A ECR Repositories (For Docker Images)
+############################################
+
+resource "aws_ecr_repository" "backend_repo" {
+  name = "agrivisionops-backend"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = { Project = "AgriVisionOps" }
+}
+
+resource "aws_ecr_repository" "frontend_repo" {
+  name = "agrivisionops-frontend"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = { Project = "AgriVisionOps" }
+}
 
 ############################################
 # 5️⃣ ECS Task Definitions
@@ -144,7 +169,7 @@ resource "aws_ecs_task_definition" "agri_task" {
   container_definitions = jsonencode([
     {
       name      = "agrivisionops-backend",
-      image     = "987686462469.dkr.ecr.us-east-1.amazonaws.com/agrivisionops-backend:latest",
+      image = "${aws_ecr_repository.backend_repo.repository_url}:latest",
       essential = true,
       portMappings = [{
         containerPort = 8090,
@@ -175,7 +200,7 @@ resource "aws_ecs_task_definition" "frontend_task" {
   container_definitions = jsonencode([
     {
       name      = "agrivisionops-frontend",
-      image     = "987686462469.dkr.ecr.us-east-1.amazonaws.com/agrivisionops-frontend:latest",
+      image = "${aws_ecr_repository.frontend_repo.repository_url}:latest",
       essential = true,
       portMappings = [{
         containerPort = 3000,
@@ -413,3 +438,5 @@ output "frontend_service_name" { value = aws_ecs_service.frontend_service.name }
 output "backend_service_name" { value = aws_ecs_service.backend_service.name }
 output "public_url" { value = "http://${aws_lb.ecs_alb.dns_name}" }
 output "sagemaker_notebook_name" { value = aws_sagemaker_notebook_instance.agrosphere_notebook.name }
+output "ecr_backend_repo_url" { value = aws_ecr_repository.backend_repo.repository_url }
+output "ecr_frontend_repo_url" { value = aws_ecr_repository.frontend_repo.repository_url }
