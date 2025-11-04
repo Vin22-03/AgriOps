@@ -38,6 +38,7 @@ pipeline {
             echo "📋 Initializing Terraform backend & fetching outputs..."
             script {
               // Initialize Terraform safely (requires access to S3 backend state)
+              // We capture returnStatus here to ensure the command ran, but rely on .trim().isEmpty() for output content check.
               sh(script: 'terraform init -input=false -no-color', returnStatus: true)
 
               // Capture Terraform outputs using -raw
@@ -47,13 +48,15 @@ pipeline {
               
               // --- CRITICAL SAFETY CHECK: Ensure outputs were found ---
               if (alb_dns_name.isEmpty() || backendSvc.isEmpty() || frontendSvc.isEmpty()) {
-                  error("❌ Terraform outputs are empty. Ensure 'terraform apply' has run successfully in the 'terraform' directory and the state file is accessible.")
+                  // This error is crucial, as the pipeline must halt if the infra is not found.
+                  error("❌ Terraform outputs are empty. The infrastructure required for deployment is missing. Ensure 'terraform apply' has run successfully in the 'terraform' directory and the state file is accessible.")
               }
               // --- END SAFETY CHECK ---
 
-              env.PUBLIC_URL = "http://${alb_dns_name}"
-              env.BACKEND_SERVICE_NAME = backendSvc
-              env.FRONTEND_SERVICE_NAME = frontendSvc
+              // Explicitly assign values to global environment variables
+              env.PUBLIC_URL = "http://${String.valueOf(alb_dns_name)}"
+              env.BACKEND_SERVICE_NAME = String.valueOf(backendSvc)
+              env.FRONTEND_SERVICE_NAME = String.valueOf(frontendSvc)
 
               echo "✅ ALB DNS: ${env.PUBLIC_URL}"
               echo "✅ Backend Service: ${env.BACKEND_SERVICE_NAME}"
@@ -95,8 +98,13 @@ pipeline {
                 error("❌ AWS Account ID is empty. The AWS CLI command ran but returned no output. This is usually an IAM permission issue or a networking problem preventing AWS STS API access.")
             }
             // --- END SAFETY CHECK ---
+            
+            // --- ECR URI FIX ---
+            // Explicitly build the ECR URI using concatenation to prevent Groovy interpolation failure.
+            def ecr_uri_val = String.valueOf(awsAccountId) + ".dkr.ecr." + env.AWS_DEFAULT_REGION + ".amazonaws.com"
+            env.ECR_URI = ecr_uri_val
+            // --- END FIX ---
 
-            env.ECR_URI = "${awsAccountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
             echo "✅ ECR URI set to: ${env.ECR_URI}"
             
             // Perform Docker login
@@ -193,7 +201,8 @@ pipeline {
     }
     always {
       echo "🧹 Cleaning up local Docker artifacts..."
-      sh 'docker system prune -f || true'
+      // Use '|| true' to prevent failure if docker command fails (e.g., no space to reclaim)
+      sh 'docker system prune -f || true' 
     }
   }
 }
