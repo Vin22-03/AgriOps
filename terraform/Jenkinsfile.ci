@@ -4,17 +4,19 @@ pipeline {
   options {
     timestamps()
     ansiColor('xterm')
-    disableConcurrentBuilds()
+    // Disabling concurrent builds is safe for deployment pipelines
+    disableConcurrentBuilds() 
   }
 
+  // Define global environment variables. They will be populated in the 'Fetch Terraform Outputs' stage.
   environment {
     AWS_DEFAULT_REGION = 'us-east-1'
-    BACKEND_REPO_NAME  = 'agrivisionops-backend'
+    BACKEND_REPO_NAME = 'agrivisionops-backend'
     FRONTEND_REPO_NAME = 'agrivisionops-frontend'
-    CLUSTER_NAME       = 'agrivisionops-ecs-cluster'
-    BACKEND_SERVICE_NAME  = ''
+    CLUSTER_NAME = 'agrivisionops-ecs-cluster'
+    BACKEND_SERVICE_NAME = ''
     FRONTEND_SERVICE_NAME = ''
-    ECR_URI  = ''
+    ECR_URI = '' 
     PUBLIC_URL = ''
   }
 
@@ -30,78 +32,103 @@ pipeline {
 
     stage('Fetch Terraform Outputs') {
       steps {
+        // Assume Terraform state files are stored in the 'terraform' subdirectory
         dir('terraform') {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "📋 Initializing Terraform backend & fetching outputs..."
             script {
-              // ✅ Initialize Terraform safely (no infra change)
-              sh 'terraform init -input=false -no-color'
+              // Initialize Terraform safely (requires access to S3 backend state)
+              sh(script: 'terraform init -input=false -no-color', returnStatus: true)
 
-              def alb         = sh(script: "terraform output -raw alb_dns_name", returnStdout: true).trim()
-              def backendSvc  = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
-              def frontendSvc = sh(script: "terraform output -raw frontend_service_name", returnStdout: true).trim()
+              // Capture Terraform outputs using -raw
+              def alb_dns_name  = sh(script: "terraform output -raw alb_dns_name", returnStdout: true).trim()
+              def backendSvc    = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
+              def frontendSvc   = sh(script: "terraform output -raw frontend_service_name", returnStdout: true).trim()
+              
+              // --- CRITICAL SAFETY CHECK: Ensure outputs were found ---
+              if (alb_dns_name.isEmpty() || backendSvc.isEmpty() || frontendSvc.isEmpty()) {
+                  error("❌ Terraform outputs are empty. Ensure 'terraform apply' has run successfully in the 'terraform' directory and the state file is accessible.")
+              }
+              // --- END SAFETY CHECK ---
 
-              env.PUBLIC_URL            = "http://${alb}"
-              env.BACKEND_SERVICE_NAME  = backendSvc
+              env.PUBLIC_URL = "http://${alb_dns_name}"
+              env.BACKEND_SERVICE_NAME = backendSvc
               env.FRONTEND_SERVICE_NAME = frontendSvc
 
-              echo "✅ ALB DNS: ${alb}"
-              echo "✅ Backend Service: ${backendSvc}"
-              echo "✅ Frontend Service: ${frontendSvc}"
+              echo "✅ ALB DNS: ${env.PUBLIC_URL}"
+              echo "✅ Backend Service: ${env.BACKEND_SERVICE_NAME}"
+              echo "✅ Frontend Service: ${env.FRONTEND_SERVICE_NAME}"
             }
           }
         }
       }
     }
 
-stage('AWS ECR Login') {
-  steps {
-    script {
-      withCredentials([
-        [$class: 'AmazonWebServicesCredentialsBinding', 
-         credentialsId: 'aws-creds', 
-         accessKeyVariable: 'AWS_ACCESS_KEY_ID', 
-         secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
-      ]) {
-        echo "🔐 Logging into ECR..."
+    stage('AWS ECR Login') {
+      steps {
+        script {
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            echo "🔐 Logging into ECR..."
+            
+            // Initialize with empty string to prevent Groovy 'null' interpolation issues
+            def awsAccountId = '' 
+            
+            try {
+              // Capture AWS Account ID using robust sh call.
+              awsAccountId = sh(
+                script: 'aws sts get-caller-identity --query Account --output text',
+                returnStdout: true
+              ).trim()
+              
+              // --- DEBUG STEP: Log the raw captured value ---
+              echo "🔎 Captured AWS Account ID (Raw): '${awsAccountId}'"
+              // ---------------------------------------------
 
-        // 🧠 Get AWS Account ID (this must now always return your ID)
-        def awsAccountId = sh(
-          script: "aws sts get-caller-identity --query Account --output text",
-          returnStdout: true
-        ).trim()
+            } catch (e) {
+                // Fail immediately and explicitly if the AWS CLI call fails.
+                error("❌ Failed to execute AWS CLI command to get Account ID. Check 'aws-creds' permissions, network access, and IAM policies. Error: ${e.getMessage()}")
+            }
+            
+            // --- CRITICAL SAFETY CHECK: Check for empty string ---
+            if (awsAccountId.isEmpty()) {
+                // This catches the case where the command ran, but the output was empty (e.g., IAM permissions issue).
+                error("❌ AWS Account ID is empty. The AWS CLI command ran but returned no output. This is usually an IAM permission issue or a networking problem preventing AWS STS API access.")
+            }
+            // --- END SAFETY CHECK ---
 
-        if (!awsAccountId) {
-          error "❌ AWS Account ID not found! Check your credentials or IAM permissions."
+            env.ECR_URI = "${awsAccountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
+            echo "✅ ECR URI set to: ${env.ECR_URI}"
+            
+            // Perform Docker login
+            sh "aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${env.ECR_URI}"
+          }
         }
-
-        env.ECR_URI = "${awsAccountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
-        echo "✅ ECR URI set to: ${env.ECR_URI}"
-
-        // 🪣 Login securely to ECR
-        sh """
-          aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} \
-            | docker login --username AWS --password-stdin ${env.ECR_URI}
-        """
       }
     }
-  }
-}
 
     stage('Build & Tag Docker Images') {
       steps {
         script {
           def tag = "build-${env.BUILD_NUMBER}"
-          echo "🚧 Building backend & frontend images with tag ${tag}..."
           sh """
+            echo "🚧 Building backend & frontend images with tag ${tag}..."
+
             # -------------------- BACKEND --------------------
             docker build -t ${env.BACKEND_REPO_NAME}:${tag} ./app/backend
+
+            # Tag for ECR with specific build number
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:${tag}
+            
+            # Tag for ECR with 'latest' (for deployment)
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:latest
 
             # -------------------- FRONTEND --------------------
             docker build -t ${env.FRONTEND_REPO_NAME}:${tag} ./app/frontend
+
+            # Tag for ECR with specific build number
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:${tag}
+            
+            # Tag for ECR with 'latest' (for deployment)
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:latest
           """
         }
