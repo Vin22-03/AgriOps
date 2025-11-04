@@ -45,20 +45,20 @@ pipeline {
                 terraform refresh -no-color
               '''
 
-              // ✅ Fetch each output using -raw (no sandbox issues)
-              env.PUBLIC_URL            = sh(script: 'terraform output -raw public_url || true', returnStdout: true).trim()
+              // ✅ Fetch outputs using correct Terraform variable names
+              env.PUBLIC_URL            = sh(script: 'terraform output -raw alb_dns_name || true', returnStdout: true).trim()
               env.BACKEND_SERVICE_NAME  = sh(script: 'terraform output -raw backend_service_name || true', returnStdout: true).trim()
               env.FRONTEND_SERVICE_NAME = sh(script: 'terraform output -raw frontend_service_name || true', returnStdout: true).trim()
               env.BACKEND_ECR_URI       = sh(script: 'terraform output -raw ecr_backend_repo_url || true', returnStdout: true).trim()
               env.FRONTEND_ECR_URI      = sh(script: 'terraform output -raw ecr_frontend_repo_url || true', returnStdout: true).trim()
 
-              echo "🧾 DEBUG VALUES (direct -raw fetch):"
-              echo "PUBLIC_URL: ${env.PUBLIC_URL}"
-              echo "BACKEND_ECR_URI: ${env.BACKEND_ECR_URI}"
-              echo "FRONTEND_ECR_URI: ${env.FRONTEND_ECR_URI}"
+              echo "🧾 DEBUG VALUES (Terraform outputs fetched):"
+              echo "ALB DNS: ${env.PUBLIC_URL}"
+              echo "Backend ECR: ${env.BACKEND_ECR_URI}"
+              echo "Frontend ECR: ${env.FRONTEND_ECR_URI}"
 
               if (!env.BACKEND_ECR_URI || !env.FRONTEND_ECR_URI) {
-                error("❌ Missing Terraform outputs. Check remote state or output names.")
+                error("❌ Missing Terraform outputs! Check remote state or output names.")
               }
 
               echo "✅ ALB/Public URL: ${env.PUBLIC_URL}"
@@ -156,7 +156,7 @@ pipeline {
               --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \
               --output table
           """
-          echo "🌍 Application accessible at: ${env.PUBLIC_URL}"
+          echo "🌍 Application accessible at: http://${env.PUBLIC_URL}"
         }
       }
     }
@@ -166,7 +166,7 @@ pipeline {
   post {
     success {
       echo "✅ SUCCESS: ECS deployment completed!"
-      echo "🌐 Access your app → ${env.PUBLIC_URL}"
+      echo "🌐 Access your app → http://${env.PUBLIC_URL}"
     }
     failure {
       echo "❌ FAILURE: Check build logs carefully!"
