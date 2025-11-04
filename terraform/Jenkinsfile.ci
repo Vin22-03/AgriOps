@@ -4,16 +4,20 @@ pipeline {
   options {
     timestamps()
     ansiColor('xterm')
-    disableConcurrentBuilds()
+    // Disabling concurrent builds is safe for deployment pipelines
+    disableConcurrentBuilds() 
   }
 
+  // Define global environment variables
   environment {
-    AWS_DEFAULT_REGION   = 'us-east-1'
-    BACKEND_REPO_NAME    = 'agrivisionops-backend'
-    FRONTEND_REPO_NAME   = 'agrivisionops-frontend'
-    CLUSTER_NAME         = 'agrivisionops-ecs-cluster'
+    AWS_DEFAULT_REGION   = 'us-east-1'
+    BACKEND_REPO_NAME    = 'agrivisionops-backend'
+    FRONTEND_REPO_NAME   = 'agrivisionops-frontend'
+    CLUSTER_NAME         = 'agrivisionops-ecs-cluster'
     BACKEND_SERVICE_NAME = 'agrivisionops-backend-service'
     FRONTEND_SERVICE_NAME = 'agrivisionops-frontend-service'
+    // ECR_URI will be set dynamically in the 'AWS ECR Login' stage
+    ECR_URI = '' 
   }
 
   stages {
@@ -28,14 +32,23 @@ pipeline {
 
     stage('AWS ECR Login') {
       steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-          sh '''
+        script {
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "🔐 Logging into ECR..."
-            AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-            export ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
-            echo "ECR_URI=$ECR_URI" > .ecr_uri
-            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin $ECR_URI
-          '''
+            
+            // Capture AWS Account ID directly into a Groovy variable
+            def awsAccountId = sh(
+              script: 'aws sts get-caller-identity --query Account --output text',
+              returnStdout: true
+            ).trim()
+            
+            // Set the global environment variable ECR_URI using Groovy
+            env.ECR_URI = "${awsAccountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
+            echo "ECR URI set to: ${env.ECR_URI}"
+
+            // Perform Docker login
+            sh "aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${env.ECR_URI}"
+          }
         }
       }
     }
@@ -44,18 +57,27 @@ pipeline {
       steps {
         script {
           def tag = "build-${env.BUILD_NUMBER}"
-          sh '''
-            source .ecr_uri
-            echo "🚧 Building backend & frontend images..."
+          sh """
+            echo "🚧 Building backend & frontend images with tag ${tag}..."
 
-            docker build -t ${BACKEND_REPO_NAME}:${tag} ./app/backend
-            docker tag ${BACKEND_REPO_NAME}:${tag} $ECR_URI/${BACKEND_REPO_NAME}:${tag}
-            docker tag ${BACKEND_REPO_NAME}:${tag} $ECR_URI/${BACKEND_REPO_NAME}:latest
+            # -------------------- BACKEND --------------------
+            docker build -t ${env.BACKEND_REPO_NAME}:${tag} ./app/backend
 
-            docker build -t ${FRONTEND_REPO_NAME}:${tag} ./app/frontend
-            docker tag ${FRONTEND_REPO_NAME}:${tag} $ECR_URI/${FRONTEND_REPO_NAME}:${tag}
-            docker tag ${FRONTEND_REPO_NAME}:${tag} $ECR_URI/${FRONTEND_REPO_NAME}:latest
-          '''
+            # Tag for ECR with specific build number
+            docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:${tag}
+            
+            # Tag for ECR with 'latest' (for deployment)
+            docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:latest
+
+            # -------------------- FRONTEND --------------------
+            docker build -t ${env.FRONTEND_REPO_NAME}:${tag} ./app/frontend
+
+            # Tag for ECR with specific build number
+            docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:${tag}
+            
+            # Tag for ECR with 'latest' (for deployment)
+            docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:latest
+          """
         }
       }
     }
@@ -63,12 +85,11 @@ pipeline {
     stage('Push Images to ECR') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-          sh '''
-            source .ecr_uri
-            echo "⬆️ Pushing images to ECR..."
-            docker push $ECR_URI/${BACKEND_REPO_NAME}:latest
-            docker push $ECR_URI/${FRONTEND_REPO_NAME}:latest
-          '''
+          sh """
+            echo "⬆️ Pushing 'latest' images to ECR..."
+            docker push ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:latest
+            docker push ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:latest
+          """
         }
       }
     }
@@ -76,19 +97,19 @@ pipeline {
     stage('Deploy to ECS (Backend & Frontend)') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-          sh '''
-            echo "🚀 Deploying backend..."
+          sh """
+            echo "🚀 Deploying backend service ${env.BACKEND_SERVICE_NAME}..."
             aws ecs update-service \
-              --cluster ${CLUSTER_NAME} \
-              --service ${BACKEND_SERVICE_NAME} \
+              --cluster ${env.CLUSTER_NAME} \
+              --service ${env.BACKEND_SERVICE_NAME} \
               --force-new-deployment
 
-            echo "🎨 Deploying frontend..."
+            echo "🎨 Deploying frontend service ${env.FRONTEND_SERVICE_NAME}..."
             aws ecs update-service \
-              --cluster ${CLUSTER_NAME} \
-              --service ${FRONTEND_SERVICE_NAME} \
+              --cluster ${env.CLUSTER_NAME} \
+              --service ${env.FRONTEND_SERVICE_NAME} \
               --force-new-deployment
-          '''
+          """
         }
       }
     }
@@ -96,12 +117,14 @@ pipeline {
     stage('Verify Deployment') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-          sh '''
-            aws ecs describe-services --cluster ${CLUSTER_NAME} \
-              --services ${BACKEND_SERVICE_NAME} ${FRONTEND_SERVICE_NAME} \
+          // This command checks the services and ensures they are active
+          sh """
+            echo "🔎 Verifying service status..."
+            aws ecs describe-services --cluster ${env.CLUSTER_NAME} \
+              --services ${env.BACKEND_SERVICE_NAME} ${env.FRONTEND_SERVICE_NAME} \
               --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \
               --output table
-          '''
+          """
         }
       }
     }
@@ -112,11 +135,12 @@ pipeline {
       echo "✅ SUCCESS: Both services deployed successfully!"
     }
     failure {
-      echo "❌ FAILURE: Check logs."
+      echo "❌ FAILURE: Check logs for details on the failed stage."
     }
     always {
-      echo "🧹 Cleaning workspace..."
-      sh 'docker system prune -f || true'
+      echo "🧹 Cleaning up local Docker artifacts..."
+      // The '|| true' ensures the pipeline doesn't fail if the prune command fails
+      sh 'docker system prune -f || true' 
     }
   }
 }
