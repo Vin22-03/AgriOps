@@ -4,19 +4,18 @@ pipeline {
   options {
     timestamps()
     ansiColor('xterm')
-    // Disabling concurrent builds is safe for deployment pipelines
     disableConcurrentBuilds()
   }
 
-  // Define global environment variables. They will be populated in the 'Fetch Terraform Outputs' stage.
   environment {
     AWS_DEFAULT_REGION = 'us-east-1'
     BACKEND_REPO_NAME = 'agrivisionops-backend'
     FRONTEND_REPO_NAME = 'agrivisionops-frontend'
     CLUSTER_NAME = 'agrivisionops-ecs-cluster'
+
+    // will be set dynamically
     BACKEND_SERVICE_NAME = ''
     FRONTEND_SERVICE_NAME = ''
-    // NEW: We will now store the FULL ECR URIs for each repository, not just a base URI.
     BACKEND_ECR_URI = ''
     FRONTEND_ECR_URI = ''
     PUBLIC_URL = ''
@@ -24,6 +23,7 @@ pipeline {
 
   stages {
 
+    /* ------------------------- CHECKOUT ------------------------- */
     stage('Checkout Source') {
       steps {
         echo "📦 Cloning repository..."
@@ -32,107 +32,88 @@ pipeline {
       }
     }
 
+    /* -------------------- FETCH TERRAFORM OUTPUTS -------------------- */
     stage('Fetch Terraform Outputs') {
       steps {
-        // Assume Terraform state files are stored in the 'terraform' subdirectory
         dir('terraform') {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "📋 Initializing Terraform backend & fetching outputs..."
             script {
-              // Initialize Terraform safely (requires access to S3 backend state)
-              // Added returnStatus: true to allow subsequent steps to continue even if terraform init has minor warnings.
-              sh(script: 'terraform init -input=false -no-color', returnStatus: true)
+              // Initialize Terraform & refresh remote state
+              sh '''
+                terraform init -input=false -no-color
+                terraform refresh -no-color
+              '''
 
-              // Capture all necessary Terraform outputs using -raw
-              def alb_dns_name = sh(script: "terraform output -raw public_url", returnStdout: true).trim()
-              def backendSvc = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
-              def frontendSvc = sh(script: "terraform output -raw frontend_service_name", returnStdout: true).trim()
-              
-              // CRITICAL FIX: Fetch the complete, specific ECR URIs from the outputs
-              def backendEcrUri = sh(script: "terraform output -raw backend_ecr_uri", returnStdout: true).trim()
-              def frontendEcrUri = sh(script: "terraform output -raw frontend_ecr_uri", returnStdout: true).trim()
+              // Capture all outputs safely
+              env.PUBLIC_URL          = sh(script: 'terraform output -raw public_url || true', returnStdout: true).trim()
+              env.BACKEND_SERVICE_NAME = sh(script: 'terraform output -raw backend_service_name || true', returnStdout: true).trim()
+              env.FRONTEND_SERVICE_NAME = sh(script: 'terraform output -raw frontend_service_name || true', returnStdout: true).trim()
+              env.BACKEND_ECR_URI     = sh(script: 'terraform output -raw ecr_backend_repo_url || true', returnStdout: true).trim()
+              env.FRONTEND_ECR_URI    = sh(script: 'terraform output -raw ecr_frontend_repo_url || true', returnStdout: true).trim()
 
-              // --- CRITICAL SAFETY CHECK: Ensure outputs were found ---
-              if (backendEcrUri.isEmpty() || frontendEcrUri.isEmpty() || backendSvc.isEmpty() || frontendSvc.isEmpty()) {
-                  error("❌ Terraform outputs are missing or empty. Required outputs: backend_ecr_uri, frontend_ecr_uri, backend_service_name, frontend_service_name. Check your infrastructure state.")
+              // Sanity check
+              if (!env.BACKEND_ECR_URI || !env.FRONTEND_ECR_URI) {
+                error("❌ Missing ECR repo URLs in Terraform output! Check terraform apply in phase 1.")
               }
-              // --- END SAFETY CHECK ---
 
-              // Explicitly assign values to global environment variables
-              env.PUBLIC_URL = String.valueOf(alb_dns_name)
-              env.BACKEND_SERVICE_NAME = String.valueOf(backendSvc)
-              env.FRONTEND_SERVICE_NAME = String.valueOf(frontendSvc)
-              
-              // Assigning the captured ECR URIs
-              env.BACKEND_ECR_URI = String.valueOf(backendEcrUri)
-              env.FRONTEND_ECR_URI = String.valueOf(frontendEcrUri)
-
-              echo "✅ ALB DNS: ${env.PUBLIC_URL}"
-              echo "✅ Backend ECR: ${env.BACKEND_ECR_URI}"
-              echo "✅ Frontend ECR: ${env.FRONTEND_ECR_URI}"
+              echo "✅ ALB/Public URL: ${env.PUBLIC_URL}"
+              echo "✅ Backend Service: ${env.BACKEND_SERVICE_NAME}"
+              echo "✅ Frontend Service: ${env.FRONTEND_SERVICE_NAME}"
+              echo "✅ Backend ECR URI: ${env.BACKEND_ECR_URI}"
+              echo "✅ Frontend ECR URI: ${env.FRONTEND_ECR_URI}"
             }
           }
         }
       }
     }
 
+    /* --------------------------- ECR LOGIN --------------------------- */
     stage('AWS ECR Login') {
       steps {
         script {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "🔐 Logging into ECR..."
-            
-            // Derive the ECR registry URI root from the fetched full URI
-            // E.g., extracts "987686462469.dkr.ecr.us-east-1.amazonaws.com" from the full URI
-            def fullBackendUri = env.BACKEND_ECR_URI
-            def ecrRegistryUri = fullBackendUri.substring(0, fullBackendUri.indexOf('/'))
-            
-            // Set a temporary environment variable for the registry root for cleaner shell access
-            env.ECR_REGISTRY_URI = ecrRegistryUri
-            echo "✅ ECR Registry URI set to: ${env.ECR_REGISTRY_URI}"
-            
-            // Perform Docker login using the derived registry URI
-            sh "aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${env.ECR_REGISTRY_URI}"
+            def registryRoot = env.BACKEND_ECR_URI.substring(0, env.BACKEND_ECR_URI.indexOf('/'))
+            env.ECR_REGISTRY_URI = registryRoot
+            echo "✅ ECR Registry URI: ${env.ECR_REGISTRY_URI}"
+            sh """
+              aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | \
+              docker login --username AWS --password-stdin ${env.ECR_REGISTRY_URI}
+            """
           }
         }
       }
     }
 
+    /* --------------------- BUILD & TAG DOCKER IMAGES --------------------- */
     stage('Build & Tag Docker Images') {
       steps {
         script {
           def tag = "build-${env.BUILD_NUMBER}"
+          echo "🚧 Building backend & frontend images with tag: ${tag}"
+
           sh """
-            echo "🚧 Building backend & frontend images with tag ${tag}..."
-
-            # -------------------- BACKEND --------------------
+            # BACKEND
             docker build -t ${env.BACKEND_REPO_NAME}:${tag} ./app/backend
-
-            # Tag for ECR with specific build number (using the full URI directly)
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.BACKEND_ECR_URI}:${tag}
-            
-            # Tag for ECR with 'latest' (for deployment)
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.BACKEND_ECR_URI}:latest
 
-            # -------------------- FRONTEND --------------------
+            # FRONTEND
             docker build -t ${env.FRONTEND_REPO_NAME}:${tag} ./app/frontend
-
-            # Tag for ECR with specific build number (using the full URI directly)
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.FRONTEND_ECR_URI}:${tag}
-            
-            # Tag for ECR with 'latest' (for deployment)
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.FRONTEND_ECR_URI}:latest
           """
         }
       }
     }
 
+    /* --------------------------- PUSH IMAGES --------------------------- */
     stage('Push Images to ECR') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
             echo "⬆️ Pushing images to ECR..."
-            # Use the specific, full repository URIs for pushing
             docker push ${env.BACKEND_ECR_URI}:latest
             docker push ${env.FRONTEND_ECR_URI}:latest
           """
@@ -140,56 +121,55 @@ pipeline {
       }
     }
 
-    // ... (Deploy to ECS and Verify Deployment stages remain the same, using the correctly set service names) ...
-    
+    /* --------------------------- DEPLOY TO ECS --------------------------- */
     stage('Deploy to ECS (Backend & Frontend)') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
-            echo "🚀 Updating backend service..."
-            aws ecs update-service \\
-              --cluster ${env.CLUSTER_NAME} \\
-              --service ${env.BACKEND_SERVICE_NAME} \\
+            echo "🚀 Updating ECS services with latest images..."
+            aws ecs update-service \
+              --cluster ${env.CLUSTER_NAME} \
+              --service ${env.BACKEND_SERVICE_NAME} \
               --force-new-deployment
 
-            echo "🎨 Updating frontend service..."
-            aws ecs update-service \\
-              --cluster ${env.CLUSTER_NAME} \\
-              --service ${env.FRONTEND_SERVICE_NAME} \\
+            aws ecs update-service \
+              --cluster ${env.CLUSTER_NAME} \
+              --service ${env.FRONTEND_SERVICE_NAME} \
               --force-new-deployment
           """
         }
       }
     }
 
+    /* --------------------------- VERIFY DEPLOY --------------------------- */
     stage('Verify Deployment') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           echo "🔎 Verifying ECS service health..."
           sh """
-            aws ecs describe-services --cluster ${env.CLUSTER_NAME} \\
-              --services ${env.BACKEND_SERVICE_NAME} ${env.FRONTEND_SERVICE_NAME} \\
-              --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \\
+            aws ecs describe-services \
+              --cluster ${env.CLUSTER_NAME} \
+              --services ${env.BACKEND_SERVICE_NAME} ${env.FRONTEND_SERVICE_NAME} \
+              --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \
               --output table
           """
           echo "🌍 Application accessible at: ${env.PUBLIC_URL}"
         }
       }
     }
-
   }
 
+  /* --------------------------- POST ACTIONS --------------------------- */
   post {
     success {
-      echo "✅ SUCCESS: All ECS services deployed successfully!"
-      echo "🌐 Access URL → ${env.PUBLIC_URL}"
+      echo "✅ SUCCESS: ECS deployment completed!"
+      echo "🌐 Access your app → ${env.PUBLIC_URL}"
     }
     failure {
-      echo "❌ FAILURE: Something went wrong. Check build logs carefully!"
+      echo "❌ FAILURE: Check logs carefully."
     }
     always {
-      echo "🧹 Cleaning up local Docker artifacts..."
-      // Use '|| true' to prevent failure if docker command fails (e.g., no space to reclaim)
+      echo "🧹 Cleaning up Docker cache..."
       sh 'docker system prune -f || true'
     }
   }
