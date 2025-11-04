@@ -4,11 +4,9 @@ pipeline {
   options {
     timestamps()
     ansiColor('xterm')
-    // Disabling concurrent builds is safe for deployment pipelines
-    disableConcurrentBuilds() 
+    disableConcurrentBuilds()
   }
 
-  // Define global environment variables
   environment {
     AWS_DEFAULT_REGION = 'us-east-1'
     BACKEND_REPO_NAME = 'agrivisionops-backend'
@@ -16,8 +14,8 @@ pipeline {
     CLUSTER_NAME = 'agrivisionops-ecs-cluster'
     BACKEND_SERVICE_NAME = 'agrivisionops-backend-service'
     FRONTEND_SERVICE_NAME = 'agrivisionops-frontend-service'
-    // ECR_URI will be set dynamically in the 'AWS ECR Login' stage
-    ECR_URI = '' 
+    ECR_URI = ''
+    PUBLIC_URL = ''
   }
 
   stages {
@@ -30,23 +28,35 @@ pipeline {
       }
     }
 
+    stage('Fetch Terraform Outputs') {
+      steps {
+        dir('terraform') {
+          withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            echo "📋 Fetching Terraform outputs..."
+            script {
+              def alb = sh(script: "terraform output -raw alb_dns_name", returnStdout: true).trim()
+              def backendSvc = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
+              def frontendSvc = sh(script: "terraform output -raw frontend_service_name", returnStdout: true).trim()
+              env.PUBLIC_URL = "http://${alb}"
+              env.BACKEND_SERVICE_NAME = backendSvc
+              env.FRONTEND_SERVICE_NAME = frontendSvc
+            }
+          }
+        }
+      }
+    }
+
     stage('AWS ECR Login') {
       steps {
         script {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "🔐 Logging into ECR..."
-            
-            // Capture AWS Account ID directly into a Groovy variable
             def awsAccountId = sh(
               script: 'aws sts get-caller-identity --query Account --output text',
               returnStdout: true
             ).trim()
-            
-            // Set the global environment variable ECR_URI using Groovy
             env.ECR_URI = "${awsAccountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
-            echo "ECR URI set to: ${env.ECR_URI}"
-
-            // Perform Docker login
+            echo "✅ ECR URI set to: ${env.ECR_URI}"
             sh "aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${env.ECR_URI}"
           }
         }
@@ -57,25 +67,17 @@ pipeline {
       steps {
         script {
           def tag = "build-${env.BUILD_NUMBER}"
-          sh """
-            echo "🚧 Building backend & frontend images with tag ${tag}..."
+          echo "🚧 Building backend & frontend images with tag ${tag}..."
 
+          sh """
             # -------------------- BACKEND --------------------
             docker build -t ${env.BACKEND_REPO_NAME}:${tag} ./app/backend
-
-            # Tag for ECR with specific build number
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:${tag}
-            
-            # Tag for ECR with 'latest' (for deployment)
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:latest
 
             # -------------------- FRONTEND --------------------
             docker build -t ${env.FRONTEND_REPO_NAME}:${tag} ./app/frontend
-
-            # Tag for ECR with specific build number
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:${tag}
-            
-            # Tag for ECR with 'latest' (for deployment)
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:latest
           """
         }
@@ -86,7 +88,7 @@ pipeline {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
-            echo "⬆️ Pushing 'latest' images to ECR..."
+            echo "⬆️ Pushing images to ECR..."
             docker push ${env.ECR_URI}/${env.BACKEND_REPO_NAME}:latest
             docker push ${env.ECR_URI}/${env.FRONTEND_REPO_NAME}:latest
           """
@@ -98,13 +100,13 @@ pipeline {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
-            echo "🚀 Deploying backend service ${env.BACKEND_SERVICE_NAME}..."
+            echo "🚀 Updating backend service..."
             aws ecs update-service \
               --cluster ${env.CLUSTER_NAME} \
               --service ${env.BACKEND_SERVICE_NAME} \
               --force-new-deployment
 
-            echo "🎨 Deploying frontend service ${env.FRONTEND_SERVICE_NAME}..."
+            echo "🎨 Updating frontend service..."
             aws ecs update-service \
               --cluster ${env.CLUSTER_NAME} \
               --service ${env.FRONTEND_SERVICE_NAME} \
@@ -117,14 +119,14 @@ pipeline {
     stage('Verify Deployment') {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-          // This command checks the services and ensures they are active
+          echo "🔎 Verifying ECS service health..."
           sh """
-            echo "🔎 Verifying service status..."
             aws ecs describe-services --cluster ${env.CLUSTER_NAME} \
               --services ${env.BACKEND_SERVICE_NAME} ${env.FRONTEND_SERVICE_NAME} \
               --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \
               --output table
           """
+          echo "🌍 Application accessible at: ${env.PUBLIC_URL}"
         }
       }
     }
@@ -132,15 +134,15 @@ pipeline {
 
   post {
     success {
-      echo "✅ SUCCESS: Both services deployed successfully!"
+      echo "✅ SUCCESS: All ECS services deployed successfully!"
+      echo "🌐 Access URL → ${env.PUBLIC_URL}"
     }
     failure {
-      echo "❌ FAILURE: Check logs for details on the failed stage."
+      echo "❌ FAILURE: Something went wrong. Check build logs carefully!"
     }
     always {
       echo "🧹 Cleaning up local Docker artifacts..."
-      // The '|| true' ensures the pipeline doesn't fail if the prune command fails
-      sh 'docker system prune -f || true' 
+      sh 'docker system prune -f || true'
     }
   }
 }
