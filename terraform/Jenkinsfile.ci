@@ -13,7 +13,7 @@ pipeline {
     FRONTEND_REPO_NAME = 'agrivisionops-frontend'
     CLUSTER_NAME = 'agrivisionops-ecs-cluster'
 
-    // dynamically set later
+    // Will be populated dynamically
     BACKEND_SERVICE_NAME = ''
     FRONTEND_SERVICE_NAME = ''
     BACKEND_ECR_URI = ''
@@ -39,27 +39,31 @@ pipeline {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "📋 Initializing Terraform backend & fetching outputs..."
             script {
-              // Initialize Terraform & refresh remote state (S3 backend)
+              // Initialize Terraform backend (connect to S3 state)
               sh '''
                 terraform init -input=false -no-color
                 terraform refresh -no-color
               '''
 
-              // Capture outputs & clean formatting (trim + remove stray quotes/newlines)
-              env.PUBLIC_URL            = sh(script: "terraform output -raw public_url || true", returnStdout: true).trim().replaceAll('"','')
-              env.BACKEND_SERVICE_NAME  = sh(script: "terraform output -raw backend_service_name || true", returnStdout: true).trim().replaceAll('"','')
-              env.FRONTEND_SERVICE_NAME = sh(script: "terraform output -raw frontend_service_name || true", returnStdout: true).trim().replaceAll('"','')
-              env.BACKEND_ECR_URI       = sh(script: "terraform output -raw ecr_backend_repo_url || true", returnStdout: true).trim().replaceAll('"','')
-              env.FRONTEND_ECR_URI      = sh(script: "terraform output -raw ecr_frontend_repo_url || true", returnStdout: true).trim().replaceAll('"','')
+              // ✅ Fetch all outputs in JSON format
+              def tfOutput = sh(script: 'terraform output -json', returnStdout: true).trim()
+              def outputs = readJSON text: tfOutput
 
-              echo "🧾 DEBUG VALUES (raw read):"
-              echo "PUBLIC_URL: '${env.PUBLIC_URL}'"
-              echo "BACKEND_ECR_URI: '${env.BACKEND_ECR_URI}'"
-              echo "FRONTEND_ECR_URI: '${env.FRONTEND_ECR_URI}'"
+              // ✅ Assign safely from JSON (avoids null/ANSI/trim issues)
+              env.PUBLIC_URL            = outputs.public_url?.value ?: ''
+              env.BACKEND_SERVICE_NAME  = outputs.backend_service_name?.value ?: ''
+              env.FRONTEND_SERVICE_NAME = outputs.frontend_service_name?.value ?: ''
+              env.BACKEND_ECR_URI       = outputs.ecr_backend_repo_url?.value ?: ''
+              env.FRONTEND_ECR_URI      = outputs.ecr_frontend_repo_url?.value ?: ''
 
-              // Safe validation using length check instead of boolean
-              if (env.BACKEND_ECR_URI.length() < 10 || env.FRONTEND_ECR_URI.length() < 10) {
-                error("❌ Terraform outputs appear empty or malformed. Verify that terraform apply (Phase 1) completed successfully and remote state is accessible.")
+              echo "🧾 DEBUG VALUES (from JSON):"
+              echo "PUBLIC_URL: ${env.PUBLIC_URL}"
+              echo "BACKEND_ECR_URI: ${env.BACKEND_ECR_URI}"
+              echo "FRONTEND_ECR_URI: ${env.FRONTEND_ECR_URI}"
+
+              // Safety check before proceeding
+              if (!env.BACKEND_ECR_URI || !env.FRONTEND_ECR_URI) {
+                error("❌ Terraform outputs missing! Check Phase 1 apply or remote backend access.")
               }
 
               echo "✅ ALB/Public URL: ${env.PUBLIC_URL}"
@@ -82,8 +86,6 @@ pipeline {
             def registryRoot = env.BACKEND_ECR_URI.substring(0, env.BACKEND_ECR_URI.indexOf('/'))
             env.ECR_REGISTRY_URI = registryRoot
             echo "✅ ECR Registry URI: ${env.ECR_REGISTRY_URI}"
-
-            // Official AWS ECR login
             sh """
               aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | \
               docker login --username AWS --password-stdin ${env.ECR_REGISTRY_URI}
@@ -120,7 +122,7 @@ pipeline {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
-            echo "⬆️ Pushing images to ECR..."
+            echo "⬆️ Pushing Docker images to ECR..."
             docker push ${env.BACKEND_ECR_URI}:latest
             docker push ${env.FRONTEND_ECR_URI}:latest
           """
@@ -133,7 +135,7 @@ pipeline {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
           sh """
-            echo "🚀 Updating ECS services with latest images..."
+            echo "🚀 Triggering new ECS deployments..."
             aws ecs update-service \
               --cluster ${env.CLUSTER_NAME} \
               --service ${env.BACKEND_SERVICE_NAME} \
@@ -173,7 +175,7 @@ pipeline {
       echo "🌐 Access your app → ${env.PUBLIC_URL}"
     }
     failure {
-      echo "❌ FAILURE: Check logs carefully."
+      echo "❌ FAILURE: Check build logs carefully!"
     }
     always {
       echo "🧹 Cleaning up Docker cache..."
