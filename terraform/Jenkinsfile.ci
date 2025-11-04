@@ -13,7 +13,7 @@ pipeline {
     FRONTEND_REPO_NAME = 'agrivisionops-frontend'
     CLUSTER_NAME = 'agrivisionops-ecs-cluster'
 
-    // will be set dynamically
+    // dynamically set later
     BACKEND_SERVICE_NAME = ''
     FRONTEND_SERVICE_NAME = ''
     BACKEND_ECR_URI = ''
@@ -39,22 +39,27 @@ pipeline {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
             echo "📋 Initializing Terraform backend & fetching outputs..."
             script {
-              // Initialize Terraform & refresh remote state
+              // Initialize Terraform & refresh remote state (S3 backend)
               sh '''
                 terraform init -input=false -no-color
                 terraform refresh -no-color
               '''
 
-              // Capture all outputs safely
-              env.PUBLIC_URL          = sh(script: 'terraform output -raw public_url || true', returnStdout: true).trim()
-              env.BACKEND_SERVICE_NAME = sh(script: 'terraform output -raw backend_service_name || true', returnStdout: true).trim()
-              env.FRONTEND_SERVICE_NAME = sh(script: 'terraform output -raw frontend_service_name || true', returnStdout: true).trim()
-              env.BACKEND_ECR_URI     = sh(script: 'terraform output -raw ecr_backend_repo_url || true', returnStdout: true).trim()
-              env.FRONTEND_ECR_URI    = sh(script: 'terraform output -raw ecr_frontend_repo_url || true', returnStdout: true).trim()
+              // Capture outputs & clean formatting (trim + remove stray quotes/newlines)
+              env.PUBLIC_URL            = sh(script: "terraform output -raw public_url || true", returnStdout: true).trim().replaceAll('"','')
+              env.BACKEND_SERVICE_NAME  = sh(script: "terraform output -raw backend_service_name || true", returnStdout: true).trim().replaceAll('"','')
+              env.FRONTEND_SERVICE_NAME = sh(script: "terraform output -raw frontend_service_name || true", returnStdout: true).trim().replaceAll('"','')
+              env.BACKEND_ECR_URI       = sh(script: "terraform output -raw ecr_backend_repo_url || true", returnStdout: true).trim().replaceAll('"','')
+              env.FRONTEND_ECR_URI      = sh(script: "terraform output -raw ecr_frontend_repo_url || true", returnStdout: true).trim().replaceAll('"','')
 
-              // Sanity check
-              if (!env.BACKEND_ECR_URI || !env.FRONTEND_ECR_URI) {
-                error("❌ Missing ECR repo URLs in Terraform output! Check terraform apply in phase 1.")
+              echo "🧾 DEBUG VALUES (raw read):"
+              echo "PUBLIC_URL: '${env.PUBLIC_URL}'"
+              echo "BACKEND_ECR_URI: '${env.BACKEND_ECR_URI}'"
+              echo "FRONTEND_ECR_URI: '${env.FRONTEND_ECR_URI}'"
+
+              // Safe validation using length check instead of boolean
+              if (env.BACKEND_ECR_URI.length() < 10 || env.FRONTEND_ECR_URI.length() < 10) {
+                error("❌ Terraform outputs appear empty or malformed. Verify that terraform apply (Phase 1) completed successfully and remote state is accessible.")
               }
 
               echo "✅ ALB/Public URL: ${env.PUBLIC_URL}"
@@ -77,6 +82,8 @@ pipeline {
             def registryRoot = env.BACKEND_ECR_URI.substring(0, env.BACKEND_ECR_URI.indexOf('/'))
             env.ECR_REGISTRY_URI = registryRoot
             echo "✅ ECR Registry URI: ${env.ECR_REGISTRY_URI}"
+
+            // Official AWS ECR login
             sh """
               aws ecr get-login-password --region ${env.AWS_DEFAULT_REGION} | \
               docker login --username AWS --password-stdin ${env.ECR_REGISTRY_URI}
