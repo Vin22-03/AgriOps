@@ -1,102 +1,122 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        AWS_REGION = "us-east-1"
-        TF_DIR = "terraform"
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    AWS_DEFAULT_REGION   = 'us-east-1'
+    BACKEND_REPO_NAME    = 'agrivisionops-backend'
+    FRONTEND_REPO_NAME   = 'agrivisionops-frontend'
+    CLUSTER_NAME         = 'agrivisionops-ecs-cluster'
+    BACKEND_SERVICE_NAME = 'agrivisionops-backend-service'
+    FRONTEND_SERVICE_NAME = 'agrivisionops-frontend-service'
+  }
+
+  stages {
+
+    stage('Checkout Source') {
+      steps {
+        echo "📦 Cloning repository..."
+        checkout scm
+        sh 'git rev-parse --short HEAD'
+      }
     }
 
-    stages {
-        stage('Checkout Repository') {
-            steps {
-                echo "📦 Cloning AgriVisionOps repo..."
-                git branch: 'main', url: 'https://github.com/Vin22-03/AgriOps.git', credentialsId: 'github-creds'
-            }
+    stage('AWS ECR Login') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+          sh '''
+            echo "🔐 Logging into ECR..."
+            AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            export ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+            echo "ECR_URI=$ECR_URI" > .ecr_uri
+            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin $ECR_URI
+          '''
         }
-
-        stage('Environment Verification') {
-            steps {
-                echo "🧩 Checking Terraform, AWS CLI, and Docker versions..."
-                sh '''
-                    terraform -version
-                    aws --version
-                    docker --version
-                '''
-            }
-        }
-
-        stage('Terraform Init') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "⚙️ Initializing Terraform for VPC + EKS..."
-                    sh 'terraform init -input=false'
-                }
-            }
-        }
-
-        stage('Terraform Validate') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "🔍 Validating Terraform configuration..."
-                    sh 'terraform validate'
-                }
-            }
-        }
-
-        stage('Terraform Plan') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                    dir("${TF_DIR}") {
-                        echo "🗺️ Creating Terraform Plan for EKS..."
-                        sh '''
-                            export AWS_REGION=${AWS_REGION}
-                            terraform plan -input=false -out=tfplan.out
-                        '''
-                    }
-                }
-            }
-        }
-
-        stage('Manual Approval') {
-            steps {
-                input message: "⚠️ Proceed with applying Phase-2 Terraform changes?"
-            }
-        }
-
-        stage('Terraform Apply') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                    dir("${TF_DIR}") {
-                        echo "🚀 Applying Terraform changes to create EKS..."
-                        sh '''
-                            export AWS_REGION=${AWS_REGION}
-                            terraform apply -auto-approve tfplan.out
-                        '''
-                    }
-                }
-            }
-        }
-
-        stage('Post-Deployment Outputs') {
-            steps {
-                dir("${TF_DIR}") {
-                    echo "📤 Showing EKS and VPC outputs..."
-                    sh 'terraform output'
-                }
-            }
-        }
+      }
     }
 
-    post {
-        success {
-            echo "✅ Phase-2 (VPC + EKS) Deployment Successful!"
+    stage('Build & Tag Docker Images') {
+      steps {
+        script {
+          def tag = "build-${env.BUILD_NUMBER}"
+          sh '''
+            source .ecr_uri
+            echo "🚧 Building backend & frontend images..."
+
+            docker build -t ${BACKEND_REPO_NAME}:${tag} ./app/backend
+            docker tag ${BACKEND_REPO_NAME}:${tag} $ECR_URI/${BACKEND_REPO_NAME}:${tag}
+            docker tag ${BACKEND_REPO_NAME}:${tag} $ECR_URI/${BACKEND_REPO_NAME}:latest
+
+            docker build -t ${FRONTEND_REPO_NAME}:${tag} ./app/frontend
+            docker tag ${FRONTEND_REPO_NAME}:${tag} $ECR_URI/${FRONTEND_REPO_NAME}:${tag}
+            docker tag ${FRONTEND_REPO_NAME}:${tag} $ECR_URI/${FRONTEND_REPO_NAME}:latest
+          '''
         }
-        failure {
-            echo "❌ Phase-2 failed. Please review the Jenkins logs."
-        }
-        always {
-            echo "🧹 Cleaning workspace..."
-            deleteDir()
-        }
+      }
     }
+
+    stage('Push Images to ECR') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+          sh '''
+            source .ecr_uri
+            echo "⬆️ Pushing images to ECR..."
+            docker push $ECR_URI/${BACKEND_REPO_NAME}:latest
+            docker push $ECR_URI/${FRONTEND_REPO_NAME}:latest
+          '''
+        }
+      }
+    }
+
+    stage('Deploy to ECS (Backend & Frontend)') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+          sh '''
+            echo "🚀 Deploying backend..."
+            aws ecs update-service \
+              --cluster ${CLUSTER_NAME} \
+              --service ${BACKEND_SERVICE_NAME} \
+              --force-new-deployment
+
+            echo "🎨 Deploying frontend..."
+            aws ecs update-service \
+              --cluster ${CLUSTER_NAME} \
+              --service ${FRONTEND_SERVICE_NAME} \
+              --force-new-deployment
+          '''
+        }
+      }
+    }
+
+    stage('Verify Deployment') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+          sh '''
+            aws ecs describe-services --cluster ${CLUSTER_NAME} \
+              --services ${BACKEND_SERVICE_NAME} ${FRONTEND_SERVICE_NAME} \
+              --query "services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}" \
+              --output table
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "✅ SUCCESS: Both services deployed successfully!"
+    }
+    failure {
+      echo "❌ FAILURE: Check logs."
+    }
+    always {
+      echo "🧹 Cleaning workspace..."
+      sh 'docker system prune -f || true'
+    }
+  }
 }

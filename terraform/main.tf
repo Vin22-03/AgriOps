@@ -1,7 +1,5 @@
 ############################################
-# 🌾 AgriVisionOps — Unified Terraform Infra (ECS Version)
-# ✅ Single source of truth for production
-# ✅ Remote backend with S3 + DynamoDB
+# 🌾 AgriVisionOps — Unified Terraform Infra (ECS + ALB + SageMaker)
 ############################################
 
 terraform {
@@ -81,7 +79,6 @@ module "vpc" {
   enable_dns_hostnames = true
 
   map_public_ip_on_launch = true
-
   tags = { Project = "AgriVisionOps" }
 }
 
@@ -116,59 +113,122 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
 }
 
 ############################################
-# 4️⃣ ECS Task Definition + Service (Fargate)
+# 4️⃣ CloudWatch Log Groups
 ############################################
 
+resource "aws_cloudwatch_log_group" "ecs_backend_logs" {
+  name              = "/ecs/agrivisionops-backend"
+  retention_in_days = 14
+  tags = { Project = "AgriVisionOps" }
+}
+
+resource "aws_cloudwatch_log_group" "ecs_frontend_logs" {
+  name              = "/ecs/agrivisionops-frontend"
+  retention_in_days = 14
+  tags = { Project = "AgriVisionOps" }
+}
+
+############################################
+# 5️⃣ ECS Task Definitions
+############################################
+
+# Backend Task
 resource "aws_ecs_task_definition" "agri_task" {
-  family                   = "agrivisionops-task"
+  family                   = "agrivisionops-backend-task"
   network_mode              = "awsvpc"
   requires_compatibilities  = ["FARGATE"]
   cpu                       = "512"
   memory                    = "1024"
   execution_role_arn        = aws_iam_role.ecs_task_execution_role.arn
-  container_definitions     = jsonencode([
+
+  container_definitions = jsonencode([
     {
-      name      = "agrivisionops-app",
-      image     = "987686462469.dkr.ecr.us-east-1.amazonaws.com/agrivisionops:latest",
+      name      = "agrivisionops-backend",
+      image     = "987686462469.dkr.ecr.us-east-1.amazonaws.com/agrivisionops-backend:latest",
       essential = true,
       portMappings = [{
-        containerPort = 8080,
-        hostPort      = 8080,
+        containerPort = 8090,
+        hostPort      = 8090,
         protocol      = "tcp"
-      }]
+      }],
+      logConfiguration = {
+        logDriver = "awslogs",
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.ecs_backend_logs.name,
+          awslogs-region        = "us-east-1",
+          awslogs-stream-prefix = "ecs"
+        }
+      }
     }
   ])
 }
 
-resource "aws_ecs_service" "agri_service" {
-  name            = "agrivisionops-service"
-  cluster         = aws_ecs_cluster.agri_cluster.id
-  task_definition = aws_ecs_task_definition.agri_task.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+# Frontend Task
+resource "aws_ecs_task_definition" "frontend_task" {
+  family                   = "agrivisionops-frontend-task"
+  network_mode              = "awsvpc"
+  requires_compatibilities  = ["FARGATE"]
+  cpu                       = "512"
+  memory                    = "1024"
+  execution_role_arn        = aws_iam_role.ecs_task_execution_role.arn
 
-  network_configuration {
-    subnets         = module.vpc.private_subnets
-    assign_public_ip = false
-    security_groups  = [aws_security_group.ecs_service_sg.id]
+  container_definitions = jsonencode([
+    {
+      name      = "agrivisionops-frontend",
+      image     = "987686462469.dkr.ecr.us-east-1.amazonaws.com/agrivisionops-frontend:latest",
+      essential = true,
+      portMappings = [{
+        containerPort = 3000,
+        hostPort      = 3000,
+        protocol      = "tcp"
+      }],
+      logConfiguration = {
+        logDriver = "awslogs",
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.ecs_frontend_logs.name,
+          awslogs-region        = "us-east-1",
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+############################################
+# 6️⃣ Security Groups
+############################################
+
+resource "aws_security_group" "ecs_service_sg" {
+  name        = "ecs-service-sg"
+  description = "Allow inbound access for ECS Services"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = { Project = "AgriVisionOps" }
 }
 
-############################################
-# 5️⃣ Security Group — ECS Service
-############################################
-
-resource "aws_security_group" "ecs_service_sg" {
-  name        = "ecs-service-sg"
-  description = "Allow inbound access for ECS Service"
+resource "aws_security_group" "alb_sg" {
+  name        = "agrivisionops-alb-sg"
+  description = "Allow inbound HTTP access for ALB"
   vpc_id      = module.vpc.vpc_id
 
   ingress {
     description = "Allow HTTP traffic"
-    from_port   = 8080
-    to_port     = 8080
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -184,42 +244,158 @@ resource "aws_security_group" "ecs_service_sg" {
 }
 
 ############################################
-# 6️⃣ SageMaker Notebook + Model Infra (MLOps Layer)
+# 7️⃣ Application Load Balancer (Public)
 ############################################
 
-# 📁 Dedicated S3 bucket for model artifacts (optional, separate from data)
-resource "aws_s3_bucket" "agri_model_artifacts" {
-  bucket        = "agrivisionops-model-artifacts"
-  force_destroy = true
+resource "aws_lb" "ecs_alb" {
+  name               = "agrivisionops-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = module.vpc.public_subnets
+  enable_deletion_protection = false
   tags = { Project = "AgriVisionOps" }
 }
 
-# 🧠 SageMaker Notebook Instance
+resource "aws_lb_target_group" "backend_tg" {
+  name        = "agrivisionops-backend-tg"
+  port        = 8090
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = module.vpc.vpc_id
+
+  health_check {
+    path              = "/health"
+    matcher           = "200"
+  }
+
+  tags = { Project = "AgriVisionOps" }
+}
+
+resource "aws_lb_target_group" "frontend_tg" {
+  name        = "agrivisionops-frontend-tg"
+  port        = 3000
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = module.vpc.vpc_id
+
+  health_check {
+    path              = "/"
+    matcher           = "200-399"
+  }
+
+  tags = { Project = "AgriVisionOps" }
+}
+
+resource "aws_lb_listener" "ecs_listener" {
+  load_balancer_arn = aws_lb.ecs_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend_tg.arn
+  }
+}
+
+############################################
+# 8️⃣ Listener Rules (Path-based Routing)
+############################################
+
+resource "aws_lb_listener_rule" "frontend_rule" {
+  listener_arn = aws_lb_listener.ecs_listener.arn
+  priority     = 10
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend_tg.arn
+  }
+  condition {
+    path_pattern { values = ["/", "/app*", "/frontend*"] }
+  }
+}
+
+resource "aws_lb_listener_rule" "backend_rule" {
+  listener_arn = aws_lb_listener.ecs_listener.arn
+  priority     = 20
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend_tg.arn
+  }
+  condition {
+    path_pattern { values = ["/api*", "/predict*", "/health"] }
+  }
+}
+
+############################################
+# 9️⃣ ECS Services (Attach to ALB)
+############################################
+
+resource "aws_ecs_service" "backend_service" {
+  name            = "agrivisionops-backend-service"
+  cluster         = aws_ecs_cluster.agri_cluster.id
+  task_definition = aws_ecs_task_definition.agri_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = module.vpc.private_subnets
+    assign_public_ip = false
+    security_groups  = [aws_security_group.ecs_service_sg.id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.backend_tg.arn
+    container_name   = "agrivisionops-backend"
+    container_port   = 8090
+  }
+
+  depends_on = [aws_lb_listener_rule.backend_rule]
+  tags = { Project = "AgriVisionOps" }
+}
+
+resource "aws_ecs_service" "frontend_service" {
+  name            = "agrivisionops-frontend-service"
+  cluster         = aws_ecs_cluster.agri_cluster.id
+  task_definition = aws_ecs_task_definition.frontend_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = module.vpc.private_subnets
+    assign_public_ip = false
+    security_groups  = [aws_security_group.ecs_service_sg.id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.frontend_tg.arn
+    container_name   = "agrivisionops-frontend"
+    container_port   = 3000
+  }
+
+  depends_on = [aws_lb_listener_rule.frontend_rule]
+  tags = { Project = "AgriVisionOps" }
+}
+
+############################################
+# 🔟 SageMaker Notebook + Permissions
+############################################
+
 resource "aws_sagemaker_notebook_instance" "agrosphere_notebook" {
   name          = "agrosphere-notebook"
   instance_type = "ml.t3.medium"
   role_arn      = aws_iam_role.sagemaker_role.arn
-  tags = {
-    Project = "AgriVisionOps"
-    Purpose = "Model-Training"
-  }
+  tags = { Project = "AgriVisionOps" }
 }
 
-# 🔐 Allow ECS backend to call SageMaker for inference
 resource "aws_iam_policy" "ecs_invoke_sagemaker" {
   name   = "ECSInvokeSageMakerPolicy"
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [
-      {
-        Effect   = "Allow",
-        Action   = [
-          "sagemaker:InvokeEndpoint",
-          "sagemaker:DescribeEndpoint"
-        ],
-        Resource = "*"
-      }
-    ]
+    Statement = [{
+      Effect = "Allow",
+      Action = ["sagemaker:InvokeEndpoint", "sagemaker:DescribeEndpoint"],
+      Resource = "*"
+    }]
   })
 }
 
@@ -232,12 +408,8 @@ resource "aws_iam_role_policy_attachment" "ecs_invoke_sagemaker_attach" {
 # 📤 Outputs
 ############################################
 
-output "ecs_cluster_name"      { value = aws_ecs_cluster.agri_cluster.name }
-output "ecs_service_name"      { value = aws_ecs_service.agri_service.name }
-output "ecs_task_family"       { value = aws_ecs_task_definition.agri_task.family }
-output "s3_bucket"             { value = aws_s3_bucket.agri_data.bucket }
-output "sns_topic_arn"         { value = aws_sns_topic.irrigation_alerts.arn }
-output "vpc_id"                { value = module.vpc.vpc_id }
-output "ecs_security_group"    { value = aws_security_group.ecs_service_sg.id }
+output "alb_dns_name" { value = aws_lb.ecs_alb.dns_name }
+output "frontend_service_name" { value = aws_ecs_service.frontend_service.name }
+output "backend_service_name" { value = aws_ecs_service.backend_service.name }
+output "public_url" { value = "http://${aws_lb.ecs_alb.dns_name}" }
 output "sagemaker_notebook_name" { value = aws_sagemaker_notebook_instance.agrosphere_notebook.name }
-output "model_artifact_bucket" { value = aws_s3_bucket.agri_model_artifacts.bucket }
