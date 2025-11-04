@@ -29,7 +29,7 @@ export default function PredictPage() {
     setTimestamp("");
 
     try {
-      const res = await fetch("http://localhost:8090/api/v1/predict", {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/predict", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
