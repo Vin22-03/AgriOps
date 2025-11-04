@@ -10,10 +10,10 @@ pipeline {
 
   // Define global environment variables
   environment {
-    AWS_DEFAULT_REGION   = 'us-east-1'
-    BACKEND_REPO_NAME    = 'agrivisionops-backend'
-    FRONTEND_REPO_NAME   = 'agrivisionops-frontend'
-    CLUSTER_NAME         = 'agrivisionops-ecs-cluster'
+    AWS_DEFAULT_REGION = 'us-east-1'
+    BACKEND_REPO_NAME = 'agrivisionops-backend'
+    FRONTEND_REPO_NAME = 'agrivisionops-frontend'
+    CLUSTER_NAME = 'agrivisionops-ecs-cluster'
     BACKEND_SERVICE_NAME = 'agrivisionops-backend-service'
     FRONTEND_SERVICE_NAME = 'agrivisionops-frontend-service'
     // ECR_URI will be set dynamically in the 'AWS ECR Login' stage
