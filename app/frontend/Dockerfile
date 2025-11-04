@@ -26,13 +26,16 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/next.config.* ./   # in case you have next.config.js or .mjs
 
-# Set NODE_ENV
+# Optional: copy config if exists
+RUN if [ -f /app/next.config.js ]; then cp /app/next.config.js .; fi
+RUN if [ -f /app/next.config.mjs ]; then cp /app/next.config.mjs .; fi
+
+# Environment setup
 ENV NODE_ENV=production
 
 # Expose port
 EXPOSE 3000
 
-# Start Next.js app
+# Start Next.js
 CMD ["npm", "start"]
