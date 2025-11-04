@@ -1,35 +1,38 @@
-
 # ------------------------------
 # 🌾 AgroSphere Frontend (Next.js)
+# Multi-stage build (Builder + Runner)
 # ------------------------------
 
-# 1️⃣ Base Image
+# 🧱 1️⃣ Builder stage
 FROM node:20-alpine AS builder
-
-# 2️⃣ Working directory
 WORKDIR /app
 
-# 3️⃣ Install dependencies
+# Install dependencies
 COPY package*.json ./
 RUN npm install --legacy-peer-deps
 
-# 4️⃣ Copy source code
+# Copy source code
 COPY . .
 
-# 5️⃣ Build production app
+# Build production app
 RUN npm run build
 
-# 6️⃣ Runtime image
-FROM node:20-alpine
+# 🏃‍♂️ 2️⃣ Runner stage (lightweight)
+FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Copy from builder
+# Copy only what’s needed for runtime
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/next.config.* ./   # in case you have next.config.js or .mjs
 
-# 7️⃣ Expose port
+# Set NODE_ENV
+ENV NODE_ENV=production
+
+# Expose port
 EXPOSE 3000
 
-# 8️⃣ Start Next.js
+# Start Next.js app
 CMD ["npm", "start"]
