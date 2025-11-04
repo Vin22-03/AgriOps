@@ -9,12 +9,12 @@ pipeline {
 
   environment {
     AWS_DEFAULT_REGION = 'us-east-1'
-    BACKEND_REPO_NAME = 'agrivisionops-backend'
+    BACKEND_REPO_NAME  = 'agrivisionops-backend'
     FRONTEND_REPO_NAME = 'agrivisionops-frontend'
-    CLUSTER_NAME = 'agrivisionops-ecs-cluster'
-    BACKEND_SERVICE_NAME = 'agrivisionops-backend-service'
-    FRONTEND_SERVICE_NAME = 'agrivisionops-frontend-service'
-    ECR_URI = ''
+    CLUSTER_NAME       = 'agrivisionops-ecs-cluster'
+    BACKEND_SERVICE_NAME  = ''
+    FRONTEND_SERVICE_NAME = ''
+    ECR_URI  = ''
     PUBLIC_URL = ''
   }
 
@@ -32,14 +32,22 @@ pipeline {
       steps {
         dir('terraform') {
           withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-            echo "📋 Fetching Terraform outputs..."
+            echo "📋 Initializing Terraform backend & fetching outputs..."
             script {
-              def alb = sh(script: "terraform output -raw alb_dns_name", returnStdout: true).trim()
-              def backendSvc = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
+              // ✅ Initialize Terraform safely (no infra change)
+              sh 'terraform init -input=false -no-color'
+
+              def alb         = sh(script: "terraform output -raw alb_dns_name", returnStdout: true).trim()
+              def backendSvc  = sh(script: "terraform output -raw backend_service_name", returnStdout: true).trim()
               def frontendSvc = sh(script: "terraform output -raw frontend_service_name", returnStdout: true).trim()
-              env.PUBLIC_URL = "http://${alb}"
-              env.BACKEND_SERVICE_NAME = backendSvc
+
+              env.PUBLIC_URL            = "http://${alb}"
+              env.BACKEND_SERVICE_NAME  = backendSvc
               env.FRONTEND_SERVICE_NAME = frontendSvc
+
+              echo "✅ ALB DNS: ${alb}"
+              echo "✅ Backend Service: ${backendSvc}"
+              echo "✅ Frontend Service: ${frontendSvc}"
             }
           }
         }
@@ -68,7 +76,6 @@ pipeline {
         script {
           def tag = "build-${env.BUILD_NUMBER}"
           echo "🚧 Building backend & frontend images with tag ${tag}..."
-
           sh """
             # -------------------- BACKEND --------------------
             docker build -t ${env.BACKEND_REPO_NAME}:${tag} ./app/backend
