@@ -70,6 +70,32 @@ pipeline {
       }
     }
 
+    // ✅ New Stage Added Here
+    stage('Generate Backend Env File') {
+      steps {
+        script {
+          echo "🧾 Generating backend .env file (without secrets)..."
+          sh """
+            mkdir -p app/backend
+            cat > app/backend/.env <<EOF
+# ------------------------------
+# 🌾 AgroSphere Environment Config
+# ------------------------------
+AWS_REGION=us-east-1
+USE_SAGEMAKER=true
+USE_BEDROCK=true
+SAGEMAKER_ENDPOINT_NAME=agrosphere-irrigation-endpoint-v2
+BEDROCK_MODEL_ID=anthropic.claude-instant-v1
+ENV=production
+DEBUG=false
+EOF
+            echo "✅ Backend .env file created successfully!"
+            cat app/backend/.env
+          """
+        }
+      }
+    }
+
     stage('Build & Tag Docker Images') {
       steps {
         script {
