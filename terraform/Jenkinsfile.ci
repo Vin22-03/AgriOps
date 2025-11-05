@@ -81,7 +81,7 @@ pipeline {
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.BACKEND_ECR_URI}:${tag}
             docker tag ${env.BACKEND_REPO_NAME}:${tag} ${env.BACKEND_ECR_URI}:latest
 
-            docker build -t ${env.FRONTEND_REPO_NAME}:${tag} ./app/frontend
+            docker build -t ${env.FRONTEND_REPO_NAME}:${tag} ./frontend
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.FRONTEND_ECR_URI}:${tag}
             docker tag ${env.FRONTEND_REPO_NAME}:${tag} ${env.FRONTEND_ECR_URI}:latest
           """
