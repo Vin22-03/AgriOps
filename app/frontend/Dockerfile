@@ -15,7 +15,7 @@ RUN npm install --legacy-peer-deps
 COPY . .
 
 # ✅ Copy env file (must come BEFORE build)
-COPY frontend/.env.local .env.local
+COPY app/frontend/.env.local .env.local
 
 
 # Build production app
