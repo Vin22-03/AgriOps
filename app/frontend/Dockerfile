@@ -14,6 +14,9 @@ RUN npm install --legacy-peer-deps
 # Copy source code
 COPY . .
 
+# ✅ Copy env file (must come BEFORE build)
+COPY .env.local .env.local
+
 # Build production app
 RUN npm run build
 
